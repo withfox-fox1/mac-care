@@ -24,41 +24,39 @@ struct VideoView: View {
 
     var body: some View {
         @Bindable var q = state.compressQueue
-        VStack(spacing: 0) {
-            HStack {
-                Picker("画質", selection: $q.preset) {
-                    ForEach(VideoPreset.allCases) { Text($0.label).tag($0) }
-                }.frame(width: 260).disabled(q.isRunning)
-                Button("ファイルを追加…") {
-                    let p = NSOpenPanel()
-                    p.allowsMultipleSelection = true
-                    p.allowedContentTypes = [.quickTimeMovie, .mpeg4Movie, UTType(filenameExtension: "m4v") ?? .movie]
-                    if p.runModal() == .OK { q.add(p.urls) }
-                }
-                Spacer()
-                Button("開始") { q.start() }.disabled(q.isRunning || !q.jobs.contains { $0.status == .waiting })
-                Button(q.isPaused ? "再開" : "一時停止") { q.togglePause() }.disabled(!q.isRunning)
-                Button("中止") { q.abort() }.disabled(!q.isRunning)
-                Button("完了を消去") { q.clearFinished() }
+        PaneScaffold(title: "動画圧縮", subtitle: "HEVC に変換し、検証後に元ファイルをゴミ箱へ移動します。") {
+            Picker("画質", selection: $q.preset) {
+                ForEach(VideoPreset.allCases) { Text($0.label).tag($0) }
+            }.frame(width: 240).disabled(q.isRunning)
+            Button("追加…") {
+                let p = NSOpenPanel()
+                p.allowsMultipleSelection = true
+                p.allowedContentTypes = [.quickTimeMovie, .mpeg4Movie, UTType(filenameExtension: "m4v") ?? .movie]
+                if p.runModal() == .OK { q.add(p.urls) }
             }
-            .padding()
-            if let msg = q.message { Text(msg).foregroundStyle(.orange).padding(.bottom, 6) }
-            Divider()
-            if q.jobs.isEmpty {
-                ContentUnavailableView("キューは空です", systemImage: "film",
-                                       description: Text("「大容量ファイル」から動画を追加するか、ファイルを追加してください。HEVC に変換し、検証後に元ファイルをゴミ箱へ移動します。"))
-            } else {
-                List(q.jobs) { j in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(j.url.lastPathComponent).lineLimit(1).truncationMode(.middle)
-                        Text(j.url.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                        if j.status == .running || j.status == .paused { ProgressView(value: j.progress) }
-                        Text(statusText(j)).font(.caption)
-                            .foregroundStyle({ if case .failed = j.status { return Color.red }; return Color.secondary }())
-                    }.padding(.vertical, 2)
+            Button("完了を消去") { q.clearFinished() }
+            Button(q.isPaused ? "再開" : "一時停止") { q.togglePause() }.disabled(!q.isRunning)
+            Button("中止") { q.abort() }.disabled(!q.isRunning)
+            Button("開始") { q.start() }.buttonStyle(.borderedProminent)
+                .disabled(q.isRunning || !q.jobs.contains { $0.status == .waiting })
+        } content: {
+            VStack(spacing: 0) {
+                if let msg = q.message { Text(msg).foregroundStyle(.orange).padding(.vertical, 6) }
+                if q.jobs.isEmpty {
+                    ContentUnavailableView("キューは空です", systemImage: "film",
+                                           description: Text("「大容量ファイル」から動画を追加するか、「追加…」で選択してください。"))
+                } else {
+                    List(q.jobs) { j in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(j.url.lastPathComponent).lineLimit(1).truncationMode(.middle)
+                            Text(j.url.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                            if j.status == .running || j.status == .paused { ProgressView(value: j.progress) }
+                            Text(statusText(j)).font(.caption)
+                                .foregroundStyle({ if case .failed = j.status { return Color.red }; return Color.secondary }())
+                        }.padding(.vertical, 2)
+                    }
                 }
             }
         }
-        .navigationTitle("動画圧縮")
     }
 }

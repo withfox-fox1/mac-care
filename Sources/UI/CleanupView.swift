@@ -8,46 +8,47 @@ struct CleanupView: View {
 
     var body: some View {
         let m = state.cleanup
-        VStack(spacing: 0) {
-            HStack {
-                Button(m.hasScanned ? "再スキャン" : "スキャン") {
-                    Task { await m.scan(settings: Settings.load()) }
-                }
-                .disabled(m.scanning || m.cleaning)
-                if m.scanning || m.cleaning {
-                    ProgressView().controlSize(.small)
-                    Text(m.cleaning ? "ゴミ箱へ移動中…" : m.progressText).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let f = m.lastFreed {
-                    Text("解放: \(formatBytes(f))").foregroundStyle(.green).bold()
-                }
+        PaneScaffold(title: "クリーンアップ", subtitle: "不要なキャッシュ・ログ・古い node_modules を確認し、ゴミ箱へ移動します。") {
+            if m.scanning || m.cleaning {
+                ProgressView().controlSize(.small)
+                Text(m.cleaning ? "ゴミ箱へ移動中…" : m.progressText).foregroundStyle(.secondary)
             }
-            .padding()
-            if let msg = m.message { Text(msg).foregroundStyle(.orange).padding(.horizontal) }
-            Divider()
-            if !m.hasScanned && !m.scanning {
-                ContentUnavailableView("スキャンを実行してください", systemImage: "trash",
-                                       description: Text("削除前に必ず内容を確認できます。削除はゴミ箱への移動です。"))
-            } else {
-                List {
-                    Section("不要データ") {
-                        ForEach(m.categories) { CategoryRow(category: $0, model: m) }
-                        if m.categories.isEmpty && !m.scanning { Text("掃除できる項目はありません").foregroundStyle(.secondary) }
+            if let f = m.lastFreed { Text("解放: \(formatBytes(f))").foregroundStyle(.green).bold() }
+            Button(m.hasScanned ? "再スキャン" : "スキャン") {
+                Task { await m.scan(settings: Settings.load()) }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(m.scanning || m.cleaning)
+        } content: {
+            VStack(spacing: 0) {
+                if let msg = m.message { Text(msg).foregroundStyle(.orange).padding(.horizontal).padding(.top, 8) }
+                if !m.hasScanned && !m.scanning {
+                    ContentUnavailableView("スキャンを実行してください", systemImage: "trash",
+                                           description: Text("削除前に必ず内容を確認できます。削除はゴミ箱への移動です。"))
+                } else {
+                    List {
+                        Section("不要データ") {
+                            ForEach(m.categories) { CategoryRow(category: $0, model: m) }
+                            if m.categories.isEmpty && !m.scanning { Text("掃除できる項目はありません").foregroundStyle(.secondary) }
+                        }
+                        Section("ゴミ箱") { trashSection(m) }
                     }
-                    Section("ゴミ箱") { trashSection(m) }
                 }
+                Divider()
+                HStack {
+                    Text("選択中: \(m.selectedCount) 件 / \(formatBytes(m.selectedSize))")
+                    Spacer()
+                    Button("選択した項目をゴミ箱へ") { confirmClean = true }
+                        .disabled(m.selectedCount == 0 || m.scanning || m.cleaning)
+                }
+                .padding()
             }
-            Divider()
-            HStack {
-                Text("選択中: \(m.selectedCount) 件 / \(formatBytes(m.selectedSize))")
-                Spacer()
-                Button("選択した項目をゴミ箱へ") { confirmClean = true }
-                    .disabled(m.selectedCount == 0 || m.scanning || m.cleaning)
-            }
-            .padding()
         }
-        .navigationTitle("クリーンアップ")
+        .task {
+            if state.consumeAutoScan("cleanup") {
+                await m.scan(settings: Settings.load()); state.markAutoScanDone("cleanup")
+            }
+        }
         .alert("選択した項目をゴミ箱へ移動しますか？", isPresented: $confirmClean) {
             Button("ゴミ箱へ移動", role: .destructive) { Task { await m.cleanSelected(settings: Settings.load()) } }
             Button("キャンセル", role: .cancel) {}

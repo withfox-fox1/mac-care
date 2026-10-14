@@ -61,6 +61,9 @@ struct MainWindow: View {
         } detail: {
             switch selection ?? .smartCare {
             case .cleanup: CleanupView()
+            case .security: SecurityView()
+            case .apps: AppsView()
+            case .loginItems: LoginItemsView()
             case .largeFiles: LargeFilesView()
             case .compress: VideoView()
             case .history: HistoryView()
@@ -69,14 +72,19 @@ struct MainWindow: View {
             }
         }
         .frame(minWidth: 760, minHeight: 480)
-        .onAppear(perform: applyRequest)
+        .onAppear { applyRequest(); WindowOpener.bringToFront() }
         .onChange(of: state.requestedSection) { applyRequest() }
     }
 
     private func applyRequest() {
         guard let name = state.requestedSection else { return }
-        if let item = SidebarItem.from(name) { selection = item }
+        if let item = SidebarItem.from(name) {
+            selection = item
+            // --scan 指定時のみ、表示後に読み取り専用スキャンを自動開始する
+            if CommandLine.arguments.contains("--scan") { state.autoScanSection = item.rawValue }
+        }
         state.requestedSection = nil
+        WindowOpener.bringToFront()
     }
 }
 
@@ -138,6 +146,8 @@ struct SettingsView: View {
                 LabeledContent("node_modules 未更新日数", value: "\(s.nodeModulesStaleDays) 日")
                 LabeledContent("定期スキャン", value: s.scheduledScanEnabled ? "有効" : "無効")
                 LabeledContent("スキャン間隔", value: "\(s.scanIntervalDays) 日")
+                LabeledContent("スキャン対象", value: s.scanTargets.joined(separator: ", "))
+                LabeledContent("無視リスト", value: "\(s.ignoredDetections.count) 件")
                 LabeledContent("前回の定期実行",
                                value: s.lastScheduledRun?.formatted(date: .abbreviated, time: .shortened) ?? "なし")
             }

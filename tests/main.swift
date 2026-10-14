@@ -32,6 +32,15 @@ func mk(_ rel: String, dir: Bool = false) -> URL {
     return u
 }
 
+
+func await_sync<T>(_ body: @escaping () async -> T) -> T {
+    let sem = DispatchSemaphore(value: 0)
+    var result: T!
+    Task { result = await body(); sem.signal() }
+    sem.wait()
+    return result
+}
+
 // --- SafeTrash ---
 let root = mk("a", dir: true)
 let f = mk("a/inside-\(UUID().uuidString).txt")
@@ -259,6 +268,135 @@ func runVideoTests() async {
 let sem2 = DispatchSemaphore(value: 0)
 Task { await runVideoTests(); sem2.signal() }
 sem2.wait()
+
+
+// --- Security: 純粋ロジック ---
+check(YaraEngine.parse("RuleA /tmp/a b/c.bin\nRuleB /tmp/d\nnoise line\n") ==
+      [Detection(engine: .yara, signature: "RuleA", path: "/tmp/a b/c.bin"), Detection(engine: .yara, signature: "RuleB", path: "/tmp/d")], "YARA 出力の解析(空白を含むパス)")
+check(ClamEngine.parse("/tmp/x/eicar.com: Win.Test.EICAR_HDB-1 FOUND\n/tmp/y: z: a FOUND\nWARNING: foo\n") ==
+      [Detection(engine: .clamav, signature: "Win.Test.EICAR_HDB-1", path: "/tmp/x/eicar.com"),
+       Detection(engine: .clamav, signature: "a", path: "/tmp/y: z")], "ClamAV 出力の解析")
+let ig = mk("ig/f.bin")
+var ignoreList: [IgnoredDetection] = []
+IgnoreList.add(path: ig.path, to: &ignoreList)
+let det = Detection(engine: .yara, signature: "R", path: ig.path)
+check(IgnoreList.filter([det], list: ignoreList).visible.isEmpty, "無視: 同一ハッシュは非表示")
+try! "changed content".write(to: ig, atomically: true, encoding: .utf8)
+check(IgnoreList.filter([det], list: ignoreList).visible.count == 1, "無視: ハッシュが変わると再表示")
+check(IgnoreList.filter([Detection(engine: .yara, signature: "R", path: ig.path + ".none")], list: ignoreList).visible.count == 1, "無視: 別パスは表示")
+
+// --- ログイン項目 ---
+let la = mk("la", dir: true)
+func writePlist(_ name: String, _ d: [String: Any]) {
+    (d as NSDictionary).write(to: la.appendingPathComponent(name), atomically: true)
+}
+writePlist("a.plist", ["Label": "com.test.a", "ProgramArguments": ["/bin/ls", "-l"], "RunAtLoad": true, "KeepAlive": ["SuccessfulExit": false]])
+writePlist("b.plist", ["Label": "com.test.b", "Program": "/usr/bin/true", "ProgramArguments": ["/bin/other"]])
+let pa = LoginItems.parse(plist: la.appendingPathComponent("a.plist"), domain: .user)
+check(pa?.label == "com.test.a" && pa?.program == "/bin/ls" && pa?.runAtLoad == true && pa?.keepAlive == true, "plist 解析: ProgramArguments[0]/RunAtLoad/KeepAlive(dict)")
+check(LoginItems.parse(plist: la.appendingPathComponent("b.plist"), domain: .system)?.program == "/usr/bin/true", "plist 解析: Program 優先")
+check(LoginItems.scan(dirs: [(la, .user)]).count == 2, "plist 一覧")
+check(LoginItems.parseSigner("Authority=Developer ID Application: X (T1)\nAuthority=Apple\nTeamIdentifier=T1\n") == "Developer ID Application: X (T1)", "署名者の解析")
+check(await_sync { await LoginItems.signer(of: "/nonexistent/prog") } == "実行ファイルなし", "署名者: 実行ファイルなし")
+check(await_sync { await LoginItems.signer(of: "/bin/ls") } != "未署名", "署名者: /bin/ls は署名あり")
+let d1 = LoginItems.diff(previous: [SnapshotItem(label: "a", program: "/x", sha256: "1"), SnapshotItem(label: "gone", program: "/g", sha256: "9")],
+                         current: [SnapshotItem(label: "a", program: "/x", sha256: "2"), SnapshotItem(label: "n", program: "/n", sha256: "3")])
+check(d1 == SnapshotDiff(new: ["n"], changed: ["a"], removed: ["gone"]), "スナップショット差分(新規/変更/削除)")
+let first = await_sync { await LoginItems.fullScan(dirs: [(la, .user)]) }
+check(first.diff == nil && first.items.allSatisfy { $0.change == .unchanged }, "初回スキャンは基準のみ(差分なし)")
+writePlist("c.plist", ["Label": "com.test.c", "ProgramArguments": ["/bin/ls"]])
+writePlist("a.plist", ["Label": "com.test.a", "ProgramArguments": ["/bin/echo"]])
+let second = await_sync { await LoginItems.fullScan(dirs: [(la, .user)]) }
+check(second.items.first { $0.label == "com.test.c" }?.change == .new && second.items.first { $0.label == "com.test.a" }?.change == .changed
+      && second.items.first { $0.label == "com.test.b" }?.change == .unchanged, "再スキャンで 新規/変更 を検出")
+
+// --- アプリ・関連ファイル ---
+let apps = mk("Apps", dir: true)
+func makeApp(_ rel: String, _ bid: String, _ name: String, mas: Bool = false) -> URL {
+    let a = apps.appendingPathComponent(rel)
+    try! fm.createDirectory(at: a.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+    (["CFBundleIdentifier": bid, "CFBundleName": name, "CFBundleShortVersionString": "1.2"] as NSDictionary)
+        .write(to: a.appendingPathComponent("Contents/Info.plist"), atomically: true)
+    try! "bin".write(to: a.appendingPathComponent("Contents/bin"), atomically: true, encoding: .utf8)
+    if mas { try! fm.createDirectory(at: a.appendingPathComponent("Contents/_MASReceipt"), withIntermediateDirectories: true) }
+    return a
+}
+let fooApp = makeApp("Foo.app", "com.example.foo", "Foo", mas: true)
+_ = makeApp("Group/Bar.app", "com.example.bar", "Bar")
+_ = makeApp("Group/Deep/Baz.app", "com.example.baz", "Baz")   // 2階層下は対象外
+let found2 = AppCatalog.appURLs(in: [apps]).map(\.lastPathComponent).sorted()
+check(found2 == ["Bar.app", "Foo.app"], "アプリ列挙: 直下+1階層下フォルダ")
+let fi = AppCatalog.info(for: fooApp)
+check(fi?.bundleID == "com.example.foo" && fi?.name == "Foo" && fi?.version == "1.2" && fi?.isAppStore == true && fi?.isApple == false && (fi?.size ?? 0) > 0, "アプリ情報(ID/版/App Store/サイズ)")
+let lib = mk("lib", dir: true)
+for rel in ["Application Support/com.example.foo/data.bin", "Caches/com.example.foo.helper/c.bin", "Preferences/com.example.foo.plist",
+            "Group Containers/ABCDE12345.com.example.foo/g.bin", "Application Support/Foo/n.bin", "Application Support/com.example.foobar/x.bin",
+            "Caches/Other/o.bin", "Saved Application State/com.example.foo.savedState/s.bin", "Containers/com.example.foo/k.bin"] { _ = mk("lib/\(rel)") }
+let rel = RelatedFinder.find(bundleID: "com.example.foo", appName: "Foo", library: lib)
+func relNames(_ k: RelatedFile.Kind) -> [String] { rel.filter { $0.kind == k }.map { $0.url.lastPathComponent }.sorted() }
+check(relNames(.bundleID) == ["ABCDE12345.com.example.foo", "com.example.foo", "com.example.foo", "com.example.foo.helper", "com.example.foo.plist", "com.example.foo.savedState"], "関連: Bundle ID 完全/前方/後方一致")
+check(relNames(.nameOnly) == ["Foo"], "関連: 名前のみ一致は区別される")
+check(!rel.contains { $0.url.lastPathComponent == "com.example.foobar" || $0.url.lastPathComponent == "Other" }, "関連: 無関係なものは除外")
+check(RelatedFinder.matchesBundleID("COM.Example.Foo.plist", "com.example.foo"), "関連: 大文字小文字を区別しない")
+// アンインストール（ダミー）
+let target = AppCatalog.info(for: fooApp)!
+let selected = rel.filter { $0.kind == .bundleID }
+do {
+    _ = try AppUninstaller.uninstall(app: InstalledApp(url: target.url, name: "x", bundleID: "com.apple.finder", version: "", size: 0, lastUsed: nil, isAppStore: false), related: [], isRunning: false, library: lib, appRoots: [apps])
+    check(false, "Apple 製アプリは拒否")
+} catch { check(fm.fileExists(atPath: fooApp.path), "Apple 製アプリは拒否") }
+do { _ = try AppUninstaller.uninstall(app: target, related: [], isRunning: true, library: lib, appRoots: [apps]); check(false, "実行中は拒否") }
+catch { check(fm.fileExists(atPath: fooApp.path), "実行中のアプリは拒否") }
+let ur = try? AppUninstaller.uninstall(app: target, related: selected, isRunning: false, library: lib, appRoots: [apps])
+check(ur?.failed.isEmpty == true && !fm.fileExists(atPath: fooApp.path)
+      && !fm.fileExists(atPath: lib.appendingPathComponent("Application Support/com.example.foo").path)
+      && fm.fileExists(atPath: lib.appendingPathComponent("Application Support/Foo").path)
+      && fm.fileExists(atPath: lib.appendingPathComponent("Application Support/com.example.foobar").path), "アンインストール: 本体+選択分のみ移動、名前のみ/無関係は残る")
+// 残骸
+let lib2 = mk("lib2", dir: true)
+for rel in ["Application Support/com.gone.app/a", "Application Support/com.example.bar/a", "Caches/com.example.bar.helper/a", "Application Support/com.apple.thing/a",
+            "Application Support/PlainName/a", "Preferences/com.gone.pref.plist", "Containers/com.run.x/a", "Caches/com.example/a", "Application Support/com.gone.app2/a"] { _ = mk("lib2/\(rel)") }
+let lo = Leftovers.find(library: lib2, installedIDs: ["com.example.bar"], runningIDs: ["com.run.x"]).map(\.url.lastPathComponent).sorted()
+check(lo == ["com.gone.app", "com.gone.app2", "com.gone.pref.plist"], "残骸: 未インストールのID形式のみ(インストール済/実行中/Apple/非ID形式は除外)")
+check(Leftovers.looksLikeBundleID("com.foo.bar") && !Leftovers.looksLikeBundleID("com.foo") && !Leftovers.looksLikeBundleID("Google") && !Leftovers.looksLikeBundleID("a..b"), "Bundle ID 形式判定")
+
+// --- Security E2E（ツールが無ければ SKIP） ---
+func runSecurityTests() async {
+    guard let yara = Tools.path("yara"), let yarac = Tools.path("yarac") else { print("SKIP YARA テスト (yara/yarac なし)"); return await clamTests() }
+    let sdir = mk("sec/files", dir: true)
+    let marker = "MACCARE-UNIQUE-" + "STRING-7f3a91"
+    try! "hello \(marker) world".write(to: sdir.appendingPathComponent("hit.txt"), atomically: true, encoding: .utf8)
+    try! "nothing here".write(to: sdir.appendingPathComponent("clean.txt"), atomically: true, encoding: .utf8)
+    let rules = mk("sec/test.yar")
+    try! "rule MacCareTestRule { strings: $a = \"\(marker)\" condition: $a }\n".write(to: rules, atomically: true, encoding: .utf8)
+    let out = work.appendingPathComponent("sec/test.yarc")
+    let c1 = try? await YaraEngine.ensureCompiled(rules: rules, version: "1", yarac: yarac, out: out)
+    let c2 = try? await YaraEngine.ensureCompiled(rules: rules, version: "1", yarac: yarac, out: out)
+    let c3 = try? await YaraEngine.ensureCompiled(rules: rules, version: "2", yarac: yarac, out: out)
+    check(c1 == true && c2 == false && c3 == true, "YARA: 同一バージョンは再コンパイルせず、変更時は再コンパイル")
+    let hits = (try? await YaraEngine.scan(compiled: out, target: sdir, yara: yara)) ?? []
+    check(hits.count == 1 && hits[0].signature == "MacCareTestRule" && hits[0].path.hasSuffix("/hit.txt"), "YARA: カスタムルールで検出を解析")
+    let cleanDir = mk("sec/cleanonly", dir: true)
+    try! "benign".write(to: cleanDir.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    let cleanHits = try? await YaraEngine.scan(compiled: out, target: cleanDir, yara: yara)
+    check(cleanHits?.isEmpty == true, "YARA: クリーンなディレクトリは0件")
+    await clamTests()
+}
+func clamTests() async {
+    guard let clam = Tools.path("clamscan") else { print("SKIP ClamAV テスト (clamscan なし)"); return }
+    let dir = mk("sec/clam", dir: true)
+    let eicar = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$" + "EICAR-STANDARD-ANTIVIRUS-TEST-FILE" + "!$H+H*"
+    try! eicar.write(to: dir.appendingPathComponent("eicar.com"), atomically: true, encoding: .utf8)
+    let hits = (try? await ClamEngine.scan(targets: [dir], clamscan: clam)) ?? []
+    check(hits.count == 1 && hits[0].path.hasSuffix("/eicar.com") && hits[0].signature.lowercased().contains("eicar"), "ClamAV: EICAR を検出")
+    let clean = mk("sec/clamclean", dir: true)
+    try! "benign".write(to: clean.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    let none = try? await ClamEngine.scan(targets: [clean], clamscan: clam)
+    check(none?.isEmpty == true, "ClamAV: クリーンなディレクトリは0件")
+}
+let sem3 = DispatchSemaphore(value: 0)
+Task { await runSecurityTests(); sem3.signal() }
+sem3.wait()
 
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")

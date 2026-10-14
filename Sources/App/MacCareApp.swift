@@ -18,6 +18,29 @@ enum WindowOpener {
     static func open() {
         action?()
         NSApp.activate(ignoringOtherApps: true)
+        bringToFront()
+    }
+
+    /// メインウィンドウを最前面・キーウィンドウにする。
+    /// 表示直後は未生成・非表示のことがあるため、可視になるまで間隔を空けて再試行する。
+    static func bringToFront() {
+        func front() {
+            if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+            NSApp.unhide(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            for w in NSApp.windows where !(w is NSPanel) && w.canBecomeMain {
+                if w.isMiniaturized { w.deminiaturize(nil) }
+                w.makeKeyAndOrderFront(nil)
+                w.orderFrontRegardless()
+            }
+        }
+        front()
+        for delay in [0.2, 0.6, 1.2, 2.5, 4.0, 6.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let visible = NSApp.windows.contains { !($0 is NSPanel) && $0.canBecomeMain && $0.isVisible }
+                if !visible || delay < 1 { front() }
+            }
+        }
     }
 
     /// 起動引数 `--open-window <section>`（初回のみ処理）

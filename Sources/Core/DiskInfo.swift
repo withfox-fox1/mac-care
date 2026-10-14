@@ -14,5 +14,8 @@ struct DiskInfo {
 }
 
 func formatBytes(_ bytes: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    let f = ByteCountFormatter()
+    f.countStyle = .file
+    f.allowsNonnumericFormatting = false   // "Zero KB" を避ける
+    return f.string(fromByteCount: bytes)
 }

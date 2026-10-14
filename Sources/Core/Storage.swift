@@ -13,6 +13,11 @@ enum Storage {
     static var historyURL: URL { baseDir.appendingPathComponent("history.jsonl") }
 }
 
+struct IgnoredDetection: Codable, Equatable {
+    var path: String
+    var sha256: String
+}
+
 struct Settings: Codable, Equatable {
     var largeFileThresholdMB: Int = 500
     var largeFileRoots: [String] = [NSHomeDirectory()]
@@ -20,6 +25,11 @@ struct Settings: Codable, Equatable {
     var scheduledScanEnabled: Bool = true
     var scanIntervalDays: Int = 7
     var lastScheduledRun: Date? = nil
+    var scanTargets: [String] = {
+        let h = NSHomeDirectory()
+        return [h + "/Downloads", h + "/Desktop", h + "/Documents", "/Applications"]
+    }()
+    var ignoredDetections: [IgnoredDetection] = []
 
     init() {}
 
@@ -33,6 +43,8 @@ struct Settings: Codable, Equatable {
         scheduledScanEnabled = try c.decodeIfPresent(Bool.self, forKey: .scheduledScanEnabled) ?? d.scheduledScanEnabled
         scanIntervalDays = try c.decodeIfPresent(Int.self, forKey: .scanIntervalDays) ?? d.scanIntervalDays
         lastScheduledRun = try c.decodeIfPresent(Date.self, forKey: .lastScheduledRun)
+        scanTargets = try c.decodeIfPresent([String].self, forKey: .scanTargets) ?? d.scanTargets
+        ignoredDetections = try c.decodeIfPresent([IgnoredDetection].self, forKey: .ignoredDetections) ?? d.ignoredDetections
     }
 
     static func load() -> Settings {
