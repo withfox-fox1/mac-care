@@ -19,7 +19,7 @@ cp Info.plist "$APP/Contents/Info.plist"
 
 # Apple Development 証明書があればそれで、なければアドホック署名
 IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/{print $2; exit}')
-codesign --force --options runtime --sign "${IDENTITY:--}" "$APP"
+codesign --force --options runtime --entitlements MacCare.entitlements --sign "${IDENTITY:--}" "$APP"
 echo "Built: $APP (signed with: ${IDENTITY:-ad-hoc})"
 
 if [[ "${1:-}" == "install" ]]; then

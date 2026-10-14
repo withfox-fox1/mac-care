@@ -137,6 +137,129 @@ let sem = DispatchSemaphore(value: 0)
 Task { await runShell(); sem.signal() }
 sem.wait()
 
+
+// --- Cleanup ---
+let cdir = mk("cleanup", dir: true)
+let caches = cdir.appendingPathComponent("Caches")
+for n in ["com.apple.foo", "com.run.app", "pip", "Homebrew", "other.app", "MacCareTests"] { _ = mk("cleanup/Caches/\(n)/f.bin") }
+let uc = CleanupScanner.userCacheItems(root: caches, excludedNames: ["pip", "Homebrew", "MacCareTests"], runningIDs: ["com.run.app"])
+check(uc.map(\.lastPathComponent) == ["other.app"], "キャッシュ除外: com.apple/実行中/pip/Homebrew")
+let sz = CleanupScanner.size(of: caches.appendingPathComponent("other.app"))
+check(sz.bytes > 0 && sz.skipped == 0, "dirSize が正の値")
+
+// node_modules 判定
+let projs = mk("proj", dir: true)
+let now = Date()
+func makeProject(_ name: String, ageDays: Int) {
+    _ = mk("proj/\(name)/node_modules/x/index.js")
+    _ = mk("proj/\(name)/package.json")
+    _ = mk("proj/\(name)/src/a.js")
+    let old = now.addingTimeInterval(-Double(ageDays) * 86400)
+    for rel in ["package.json", "src"] {
+        try! fm.setAttributes([.modificationDate: old], ofItemAtPath: projs.appendingPathComponent("\(name)/\(rel)").path)
+    }
+}
+makeProject("old", ageDays: 200)
+makeProject("fresh", ageDays: 5)
+_ = mk("proj/.hidden/node_modules/y.js")   // 隠しディレクトリは対象外
+_ = mk("proj/old/node_modules/x/node_modules/z.js")  // 入れ子は降りない
+let nm = CleanupScanner.staleNodeModules(roots: [projs], staleDays: 90, now: now, library: work.appendingPathComponent("zzz"))
+check(nm.map { $0.path.replacingOccurrences(of: projs.resolvingSymlinksInPath().path, with: "").replacingOccurrences(of: projs.path, with: "") } == ["/old/node_modules"], "古い node_modules のみ検出")
+let deep = mk("proj/d1/d2/d3/d4/d5/d6/node_modules/q.js")
+try! fm.setAttributes([.modificationDate: now.addingTimeInterval(-999 * 86400)], ofItemAtPath: deep.deletingLastPathComponent().deletingLastPathComponent().path)
+check(!CleanupScanner.staleNodeModules(roots: [projs], staleDays: 90, now: now).contains { $0.path.contains("d6") }, "maxDepth 超は探索しない")
+
+// 分類の実行（SafeTrash 経由で root 内のみ）
+let cat = CleanupScanner.makeCategory(id: "t", name: "t", summary: "", effect: "", roots: [caches],
+                                      urls: CleanupScanner.children(of: caches) ?? [])
+let victim = cat.items.first { $0.name == "other.app" }!
+do { try SafeTrash.trash(victim.url, allowedRoots: cat.roots); check(!fm.fileExists(atPath: victim.url.path), "分類ルート内の項目がゴミ箱へ") }
+catch { check(false, "分類ルート内の項目がゴミ箱へ: \(error)") }
+expectThrows("分類ルート外の項目は拒否") { try SafeTrash.trash(projs.appendingPathComponent("fresh"), allowedRoots: cat.roots) }
+
+// --- LargeFiles ---
+let lf = mk("lf", dir: true)
+func big(_ rel: String, _ mb: Int) {
+    let u = lf.appendingPathComponent(rel)
+    try! fm.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+    fm.createFile(atPath: u.path, contents: Data(count: mb * 1_000_000))
+}
+big("big.mov", 3); big("small.txt", 0); big(".hidden/h.bin", 3); big("node_modules/n.bin", 3)
+big("Pkg.app/Contents/p.bin", 3); big("Library/l.bin", 3); big("sub/b2.dat", 4)
+let found = LargeFileScanner.scan(roots: [lf], thresholdBytes: 2_000_000, library: lf.appendingPathComponent("Library"))
+check(found.map(\.name) == ["b2.dat", "big.mov"], "大容量: 閾値/隠し/node_modules/パッケージ/Library 除外とサイズ降順")
+check(found.first { $0.name == "big.mov" }?.isVideo == true && found.first { $0.name == "b2.dat" }?.isVideo == false, "大容量: 動画判定")
+
+// --- Video: 純粋ロジック ---
+check(VideoCompressor.shouldSkip(MediaInfo(duration: 1, videoCodec: "hevc", hasAudio: true)), "HEVC はスキップ")
+check(!VideoCompressor.shouldSkip(MediaInfo(duration: 1, videoCodec: "h264", hasAudio: true)), "H.264 は変換対象")
+let vd = mk("vname", dir: true)
+check(VideoCompressor.outputURL(for: vd.appendingPathComponent("a.mov")).lastPathComponent == "a.mp4", "出力名: 衝突なし")
+_ = mk("vname/a.mp4")
+check(VideoCompressor.outputURL(for: vd.appendingPathComponent("a.mov")).lastPathComponent == "a (圧縮).mp4", "出力名: a.mp4 既存なら (圧縮)")
+check(VideoCompressor.outputURL(for: vd.appendingPathComponent("a.mp4")).lastPathComponent == "a (圧縮).mp4", "出力名: 入力が .mp4 でも (圧縮)")
+_ = mk("vname/a (圧縮).mp4")
+check(VideoCompressor.outputURL(for: vd.appendingPathComponent("a.mp4")).lastPathComponent == "a (圧縮 2).mp4", "出力名: (圧縮) も既存なら連番")
+let mi = MediaInfo(duration: 10, videoCodec: "hevc", hasAudio: true)
+check(VideoCompressor.verify(input: mi, inputSize: 100, output: mi, outputSize: 50) == nil, "検証: 正常")
+check(VideoCompressor.verify(input: mi, inputSize: 100, output: mi, outputSize: 100) != nil, "検証: サイズ非縮小は失敗")
+check(VideoCompressor.verify(input: mi, inputSize: 100, output: MediaInfo(duration: 11.5, videoCodec: "hevc", hasAudio: true), outputSize: 50) != nil, "検証: 長さ差>1秒は失敗")
+check(VideoCompressor.verify(input: mi, inputSize: 100, output: MediaInfo(duration: 10.5, videoCodec: "hevc", hasAudio: true), outputSize: 50) == nil, "検証: 長さ差0.5秒は許容")
+check(VideoCompressor.verify(input: mi, inputSize: 100, output: MediaInfo(duration: 10, videoCodec: "hevc", hasAudio: false), outputSize: 50) != nil, "検証: 音声欠落は失敗")
+check(VideoCompressor.verify(input: mi, inputSize: 100, output: MediaInfo(duration: 10, videoCodec: nil, hasAudio: true), outputSize: 50) != nil, "検証: 映像なしは失敗")
+
+// --- Video: E2E（ffmpeg が無ければ SKIP） ---
+func runVideoTests() async {
+    guard let ffmpeg = Tools.path("ffmpeg"), let ffprobe = Tools.path("ffprobe") else { print("SKIP 動画E2E (ffmpeg なし)"); return }
+    func gen(_ rel: String, codec: String = "libx264") async -> URL {
+        let u = work.appendingPathComponent(rel)
+        try! fm.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let r = try? await Shell.run(ffmpeg, ["-hide_banner", "-y", "-f", "lavfi", "-i", "testsrc=duration=3:size=640x360:rate=30",
+                                              "-f", "lavfi", "-i", "sine=duration=3", "-c:v", codec, "-b:v", "4M",
+                                              "-pix_fmt", "yuv420p", "-c:a", "aac", u.path])
+        if r?.exitCode != 0 { print("生成失敗: \(r?.stderr ?? "")") }
+        return u
+    }
+    // 成功ケース
+    let src = await gen("v1/in.mov")
+    let cdate = Date(timeIntervalSince1970: 1_500_000_000)
+    try? fm.setAttributes([.creationDate: cdate, .modificationDate: cdate], ofItemAtPath: src.path)
+    let oc = await VideoCompressor.compress(input: src, preset: .standard, ffmpeg: ffmpeg, ffprobe: ffprobe)
+    let outURL = src.deletingLastPathComponent().appendingPathComponent("in.mp4")
+    if case .done(let saved, let o) = oc {
+        check(saved > 0 && o == outURL && fm.fileExists(atPath: outURL.path), "E2E: 圧縮成功で出力が存在")
+        let info = try? await VideoCompressor.probe(outURL, ffprobe: ffprobe)
+        check(info?.videoCodec == "hevc" && info?.hasAudio == true, "E2E: 出力は HEVC + 音声あり")
+        check(!fm.fileExists(atPath: src.path), "E2E: 元ファイルが元の場所から消える")
+        let a = try? fm.attributesOfItem(atPath: outURL.path)
+        check((a?[.modificationDate] as? Date) == cdate, "E2E: 更新日が引き継がれる")
+        check(History.readAll().contains { $0.kind == .compress && $0.bytes == saved }, "E2E: 履歴に compress が残る")
+        // HEVC 済みはスキップ
+        let again = await VideoCompressor.compress(input: outURL, preset: .standard, ffmpeg: ffmpeg, ffprobe: ffprobe)
+        check(again == .skipped("HEVC 変換済み") && fm.fileExists(atPath: outURL.path), "E2E: HEVC 済みはスキップ")
+    } else { check(false, "E2E: 圧縮成功 (\(oc))") }
+    // 検証失敗ケース（verifier 注入）
+    let src2 = await gen("v2/in2.mov")
+    let oc2 = await VideoCompressor.compress(input: src2, preset: .high, ffmpeg: ffmpeg, ffprobe: ffprobe,
+                                             verifier: { _, _, _, _ in "テスト用の強制失敗" })
+    var failedOK = false
+    if case .failed = oc2 { failedOK = true }
+    check(failedOK, "E2E: 検証失敗は failed")
+    check(fm.fileExists(atPath: src2.path), "E2E: 検証失敗で元ファイルが残る")
+    check(!fm.fileExists(atPath: src2.deletingLastPathComponent().appendingPathComponent("in2.mp4").path), "E2E: 検証失敗で出力が消える")
+    // 中止ケース
+    let src3 = await gen("v3/in3.mov")
+    let t = Task { await VideoCompressor.compress(input: src3, preset: .standard, ffmpeg: ffmpeg, ffprobe: ffprobe,
+                                                  verifier: { _, _, _, _ in nil }) }
+    t.cancel()
+    let oc3 = await t.value
+    check(oc3 == .cancelled && fm.fileExists(atPath: src3.path)
+          && !fm.fileExists(atPath: src3.deletingLastPathComponent().appendingPathComponent("in3.mp4").path), "E2E: 中止で元が残り出力なし")
+}
+let sem2 = DispatchSemaphore(value: 0)
+Task { await runVideoTests(); sem2.signal() }
+sem2.wait()
+
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")
 exit(failures == 0 ? 0 : 1)

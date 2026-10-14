@@ -27,7 +27,11 @@ private final class ProcessBox: @unchecked Sendable {
     func cancel() {
         lock.lock(); defer { lock.unlock() }
         cancelled = true
-        if started && process.isRunning { process.terminate() }
+        if started && process.isRunning {
+            process.terminate()
+            // SIGSTOP 中のプロセスは SIGTERM を処理できないため再開させる
+            kill(process.processIdentifier, SIGCONT)
+        }
     }
 }
 
@@ -38,7 +42,8 @@ enum Shell {
     static func run(
         _ executable: String,
         _ arguments: [String] = [],
-        onLine: (@Sendable (String) -> Void)? = nil
+        onLine: (@Sendable (String) -> Void)? = nil,
+        onStart: (@Sendable (Int32) -> Void)? = nil
     ) async throws -> ShellResult {
         try Task.checkCancellation()
         let box = ProcessBox()
@@ -59,6 +64,7 @@ enum Shell {
                         cont.resume(throwing: ShellError.launchFailed("\(executable): \(error.localizedDescription)"))
                         return
                     }
+                    onStart?(p.processIdentifier)
                     var errData = Data()
                     let group = DispatchGroup()
                     group.enter()

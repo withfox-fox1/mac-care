@@ -30,6 +30,12 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .settings: "gearshape"
         }
     }
+    /// 起動引数用の名前（rawValue のほか別名も受け付ける）
+    static func from(_ name: String) -> SidebarItem? {
+        let n = name.lowercased()
+        if n == "video" { return .compress }
+        return allCases.first { $0.rawValue.lowercased() == n }
+    }
     var phase: String {
         switch self {
         case .cleanup: "P1"
@@ -43,6 +49,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 }
 
 struct MainWindow: View {
+    @Environment(AppState.self) private var state
     @State private var selection: SidebarItem? = .smartCare
 
     var body: some View {
@@ -53,12 +60,23 @@ struct MainWindow: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             switch selection ?? .smartCare {
+            case .cleanup: CleanupView()
+            case .largeFiles: LargeFilesView()
+            case .compress: VideoView()
             case .history: HistoryView()
             case .settings: SettingsView()
             case let item: PlaceholderView(item: item)
             }
         }
         .frame(minWidth: 760, minHeight: 480)
+        .onAppear(perform: applyRequest)
+        .onChange(of: state.requestedSection) { applyRequest() }
+    }
+
+    private func applyRequest() {
+        guard let name = state.requestedSection else { return }
+        if let item = SidebarItem.from(name) { selection = item }
+        state.requestedSection = nil
     }
 }
 

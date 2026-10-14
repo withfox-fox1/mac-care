@@ -20,6 +20,8 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>ゴミ箱を空にするために Finder を操作します。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>
