@@ -62,8 +62,18 @@ final class LargeFilesModel {
     var info = ""
     var message: String? = nil
 
+    private var scanTask: Task<Void, Never>?
+
+    /// 実行中のスキャンがあれば完了を待つ
     func scan(settings: Settings) async {
-        guard !scanning else { return }
+        if let t = scanTask { await t.value; return }
+        let t = Task { await self.performScan(settings: settings) }
+        scanTask = t
+        await t.value
+        scanTask = nil
+    }
+
+    private func performScan(settings: Settings) async {
         scanning = true; message = nil
         let roots = settings.largeFileRoots.map { URL(fileURLWithPath: $0) }
         let threshold = Int64(settings.largeFileThresholdMB) * 1_000_000
@@ -76,15 +86,15 @@ final class LargeFilesModel {
         info = "\(r.count) 件 / 合計 \(formatBytes(r.reduce(0) { $0 + $1.size })) （\(String(format: "%.1f", Date().timeIntervalSince(start))) 秒）"
     }
 
-    func trash(_ targets: [LargeFile]) async {
-        let home = [URL(fileURLWithPath: NSHomeDirectory())]
+    /// スナップショットされたファイルのみをゴミ箱へ。許可範囲は呼び出し側が渡す（設定の検索範囲）。
+    func trash(_ targets: [LargeFile], roots: [URL]) async {
         let failed = await Task.detached { () -> Int in
             var f = 0
-            for t in targets { do { try SafeTrash.trash(t.url, allowedRoots: home) } catch { f += 1 } }
+            for t in targets { do { try SafeTrash.trash(t.url, allowedRoots: roots) } catch { f += 1 } }
             return f
         }.value
         let gone = Set(targets.map(\.id))
         files.removeAll { gone.contains($0.id) && !FileManager.default.fileExists(atPath: $0.url.path) }
-        message = failed > 0 ? "\(failed) 件をゴミ箱へ移動できませんでした。" : nil
+        message = failed > 0 ? "\(failed) 件をゴミ箱へ移動できませんでした（検索範囲外、または保護対象）。" : nil
     }
 }

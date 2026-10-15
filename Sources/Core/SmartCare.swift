@@ -44,6 +44,10 @@ enum SmartCare {
     static func safeItemIDs(_ cats: [CleanupCategory]) -> Set<String> {
         Set(safeCategories(cats).flatMap { $0.items.map(\.id) })
     }
+    /// 安全な分類の削除対象スナップショット（共有の選択状態は使わない）
+    static func safeJobs(_ cats: [CleanupCategory]) -> [CleanupJob] {
+        safeCategories(cats).flatMap { c in c.items.map { CleanupJob(item: $0, roots: c.roots) } }
+    }
 }
 
 // MARK: - スケジューラ
@@ -151,12 +155,37 @@ enum SmartCareStep: String, CaseIterable {
     case cleanup = "不要データの集計", security = "セキュリティスキャン", loginItems = "ログイン項目の確認", largeFiles = "大容量ファイルの集計"
 }
 
+/// 各ステップの出力（ステップ完了直後の値を保持する。最後に共有状態を読み直さない）
+struct SmartCareSteps {
+    var cleanup: @MainActor (AppState, Settings) async -> (junk: Int64, safeJunk: Int64)
+    var security: @MainActor (AppState) async -> Int
+    var loginItems: @MainActor (AppState) async -> (new: Int, changed: Int)
+    var largeFiles: @MainActor (AppState, Settings) async -> (count: Int, bytes: Int64)
+
+    static let live = SmartCareSteps(
+        cleanup: { st, settings in
+            await st.cleanup.scan(settings: settings)
+            let cats = st.cleanup.categories   // 完了直後に確定させる
+            return (cats.reduce(0) { $0 + $1.size }, SmartCare.safeCategories(cats).reduce(0) { $0 + $1.size })
+        },
+        security: { st in await st.security.scan(state: st); return st.security.detections.count },
+        loginItems: { st in
+            await st.loginItems.scan()
+            return (st.loginItems.diff?.new.count ?? 0, st.loginItems.diff?.changed.count ?? 0)
+        },
+        largeFiles: { st, settings in
+            await st.largeFiles.scan(settings: settings)
+            return (st.largeFiles.files.count, st.largeFiles.files.reduce(0) { $0 + $1.size })
+        })
+}
+
 @MainActor @Observable
 final class SmartCareModel {
     var running = false
     var currentStep: SmartCareStep? = nil
     var doneSteps: Set<SmartCareStep> = []
     var result: SmartCareResult? = SmartCareResult.load()
+    var steps = SmartCareSteps.live
     private var cancelled = false
 
     var statusText: String { currentStep.map { "\($0.rawValue)中…" } ?? "" }
@@ -175,34 +204,28 @@ final class SmartCareModel {
         let t0 = Date()
 
         currentStep = .cleanup
-        await state.cleanup.scan(settings: settings)
+        let junk = await steps.cleanup(state, settings)
         doneSteps.insert(.cleanup)
         guard !cancelled else { return }
 
         currentStep = .security
-        await state.security.scan(state: state)
+        let threats = await steps.security(state)
         guard !cancelled else { return }
         doneSteps.insert(.security)
 
         currentStep = .loginItems
-        await state.loginItems.scan()
+        let logins = await steps.loginItems(state)
         doneSteps.insert(.loginItems)
         guard !cancelled else { return }
 
         currentStep = .largeFiles
-        await state.largeFiles.scan(settings: settings)
+        let large = await steps.largeFiles(state, settings)
         doneSteps.insert(.largeFiles)
 
-        let cats = state.cleanup.categories
         let r = SmartCareResult(
-            date: Date(),
-            junkBytes: cats.reduce(0) { $0 + $1.size },
-            safeJunkBytes: SmartCare.safeCategories(cats).reduce(0) { $0 + $1.size },
-            threats: state.security.detections.count,
-            newLoginItems: state.loginItems.diff?.new.count ?? 0,
-            changedLoginItems: state.loginItems.diff?.changed.count ?? 0,
-            largeFileCount: state.largeFiles.files.count,
-            largeFileBytes: state.largeFiles.files.reduce(0) { $0 + $1.size },
+            date: Date(), junkBytes: junk.junk, safeJunkBytes: junk.safeJunk, threats: threats,
+            newLoginItems: logins.new, changedLoginItems: logins.changed,
+            largeFileCount: large.count, largeFileBytes: large.bytes,
             deep: settings.deepScan, seconds: Date().timeIntervalSince(t0))
         r.save()
         result = r
@@ -212,14 +235,12 @@ final class SmartCareModel {
                                          detail: "\(r.summary)、\(Int(r.seconds)) 秒"))
     }
 
-    /// 既定で安全な分類のみをゴミ箱へ（呼び出し側で確認ダイアログを出すこと）
-    func trashSafe(state: AppState) async {
-        let c = state.cleanup
-        c.selected = SmartCare.safeItemIDs(c.categories)
-        await c.cleanSelected(settings: Settings.load())
-        // 解放後の集計を反映
+    /// 確認済みのスナップショットのみをゴミ箱へ。CleanupModel.selected は変更しない。
+    func trashSafe(_ jobs: [CleanupJob], state: AppState) async {
+        await state.cleanup.cleanItems(jobs, settings: Settings.load())
+        // 解放後の集計を反映（クリーンアップ画面の最新状態から）
         if var r = result {
-            let cats = c.categories
+            let cats = state.cleanup.categories
             r.junkBytes = cats.reduce(0) { $0 + $1.size }
             r.safeJunkBytes = SmartCare.safeCategories(cats).reduce(0) { $0 + $1.size }
             r.save(); result = r

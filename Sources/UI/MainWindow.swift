@@ -55,8 +55,9 @@ struct MainWindow: View {
     var body: some View {
         NavigationSplitView {
             List(SidebarItem.allCases, selection: $selection) { item in
-                Label(item.title, systemImage: item.symbol).tag(item)
+                Label { Text(item.title) } icon: { Image(systemName: item.symbol).foregroundStyle(.tint) }.tag(item)
             }
+            .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             switch selection ?? .smartCare {
@@ -86,7 +87,6 @@ struct MainWindow: View {
             if state.launchScanPending { state.autoScanSection = item.rawValue; state.launchScanPending = false }
         }
         state.requestedSection = nil
-        WindowOpener.bringToFront()
     }
 }
 

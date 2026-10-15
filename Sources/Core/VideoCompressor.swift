@@ -65,7 +65,10 @@ enum VideoCompressor {
 
     /// 検証。問題なければ nil、あれば理由。
     static func verify(input: MediaInfo, inputSize: Int64, output: MediaInfo, outputSize: Int64) -> String? {
+        if input.duration <= 0 { return "元ファイルの長さを取得できません" }
+        if output.duration <= 0 { return "出力の長さを取得できません" }
         if output.videoCodec == nil { return "出力に映像ストリームがありません" }
+        if output.videoCodec != "hevc" { return "出力の映像コーデックが HEVC ではありません(\(output.videoCodec ?? ""))" }
         if input.hasAudio != output.hasAudio { return "音声ストリームの有無が元と一致しません" }
         if abs(input.duration - output.duration) > 1.0 { return "長さが元と1秒を超えて異なります" }
         if outputSize >= inputSize { return "出力が元のファイルより小さくなりませんでした" }
@@ -74,7 +77,7 @@ enum VideoCompressor {
 
     /// 1ファイルの圧縮。失敗・中止時は作成した出力のみゴミ箱へ（SafeTrash 経由）。
     static func compress(input: URL, preset: VideoPreset, ffmpeg: String, ffprobe: String,
-                         trashRoots: [URL] = [URL(fileURLWithPath: NSHomeDirectory())],
+                         trashRoots: [URL]? = nil,
                          control: JobControl = JobControl(),
                          verifier: Verifier = { verify(input: $0, inputSize: $1, output: $2, outputSize: $3) },
                          progress: @escaping @Sendable (Double) -> Void = { _ in }) async -> CompressOutcome {
@@ -131,7 +134,8 @@ enum VideoCompressor {
         if let d = inAttr[.creationDate] { attrs[.creationDate] = d }
         if let d = inAttr[.modificationDate] { attrs[.modificationDate] = d }
         try? fm.setAttributes(attrs, ofItemAtPath: out.path)
-        do { try SafeTrash.trash(input, allowedRoots: trashRoots) }
+        // 元ファイルの許可範囲は、その親ディレクトリのみ
+        do { try SafeTrash.trash(input, allowedRoots: trashRoots ?? [input.deletingLastPathComponent()]) }
         catch { return .failed("圧縮は成功しましたが元ファイルをゴミ箱へ移動できませんでした: \(error)") }
         let saved = inSize - outSize
         try? History.append(HistoryEntry(date: Date(), kind: .compress, target: input.path, bytes: saved,

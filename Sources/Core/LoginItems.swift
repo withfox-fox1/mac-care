@@ -136,11 +136,43 @@ enum LoginItems {
         return (items, diffResult, diffResult?.removed ?? [])
     }
 
-    /// ユーザー領域の項目を無効化: launchctl bootout（未ロードのエラーは無視）→ plist をゴミ箱へ
-    static func disable(_ item: LoginItem) async throws {
+    enum DisableError: Error, CustomStringConvertible {
+        case bootoutFailed(String)
+        case stillLoaded
+        var description: String {
+            switch self {
+            case .bootoutFailed(let m): return "launchctl bootout に失敗したため、plist はそのままにしました: \(m)"
+            case .stillLoaded: return "bootout 後もジョブが読み込まれたままのため、plist はそのままにしました。"
+            }
+        }
+    }
+
+    typealias Launchctl = @Sendable ([String]) async -> ShellResult?
+
+    static let realLaunchctl: Launchctl = { args in try? await Shell.run("/bin/launchctl", args) }
+
+    /// 「未ロード」とみなすエラー（bootout が対象を見つけられなかった場合）
+    static func isNotLoaded(_ r: ShellResult) -> Bool {
+        if r.exitCode == 3 || r.exitCode == 113 { return true }
+        let t = (r.stderr + r.stdout).lowercased()
+        return t.contains("no such process") || t.contains("not loaded") || t.contains("could not find") || t.contains("not found")
+    }
+
+    /// ユーザー領域の項目を無効化: launchctl bootout（未ロードは正常）→ 消えたことを確認 → plist をゴミ箱へ。
+    /// bootout の失敗や確認失敗時は plist に触れない。
+    static func disable(_ item: LoginItem, launchctl: Launchctl = realLaunchctl,
+                        agentsRoot: URL = home.appendingPathComponent("Library/LaunchAgents")) async throws {
         guard item.domain == .user else { throw SafeTrashError.denied(item.plistURL.path) }
-        _ = try? await Shell.run("/bin/launchctl", ["bootout", "gui/\(getuid())", item.plistURL.path])
-        try SafeTrash.trash(item.plistURL, allowedRoots: [home.appendingPathComponent("Library/LaunchAgents")])
+        let uid = getuid()
+        guard let r = await launchctl(["bootout", "gui/\(uid)", item.plistURL.path]) else {
+            throw DisableError.bootoutFailed("launchctl を実行できません")
+        }
+        if r.exitCode != 0 && !isNotLoaded(r) {
+            throw DisableError.bootoutFailed(r.stderr.isEmpty ? "終了コード \(r.exitCode)" : r.stderr)
+        }
+        // 読み込み解除の確認（print が失敗＝存在しない、が期待する状態）
+        if let p = await launchctl(["print", "gui/\(uid)/\(item.label)"]), p.exitCode == 0 { throw DisableError.stillLoaded }
+        try SafeTrash.trash(item.plistURL, allowedRoots: [agentsRoot])
         try? History.append(HistoryEntry(date: Date(), kind: .loginItem, target: item.plistURL.path, bytes: 0,
                                          result: "ok", detail: "無効化: \(item.label)"))
     }

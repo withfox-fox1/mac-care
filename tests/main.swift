@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 var failures = 0
 var count = 0
@@ -151,8 +152,10 @@ sem.wait()
 let cdir = mk("cleanup", dir: true)
 let caches = cdir.appendingPathComponent("Caches")
 for n in ["com.apple.foo", "com.run.app", "pip", "Homebrew", "other.app", "MacCareTests"] { _ = mk("cleanup/Caches/\(n)/f.bin") }
-let uc = CleanupScanner.userCacheItems(root: caches, excludedNames: ["pip", "Homebrew", "MacCareTests"], runningIDs: ["com.run.app"])
-check(uc.map(\.lastPathComponent) == ["other.app"], "キャッシュ除外: com.apple/実行中/pip/Homebrew")
+var run1 = CleanupScanner.RunningInfo(); run1.ids = ["com.run.app"]
+let uc = CleanupScanner.userCacheItems(root: caches, otherCategoryNames: ["pip", "Homebrew"], running: run1)
+check(uc.keep.map(\.lastPathComponent) == ["other.app"], "キャッシュ除外: com.apple/実行中/pip/Homebrew/never-clean")
+check(Set(uc.excluded.map(\.name)) == ["com.apple.foo", "com.run.app", "pip", "Homebrew", "MacCareTests"] && uc.excluded.allSatisfy { !$0.reason.isEmpty }, "キャッシュ除外: 除外項目と理由が返る")
 let sz = CleanupScanner.size(of: caches.appendingPathComponent("other.app"))
 check(sz.bytes > 0 && sz.skipped == 0, "dirSize が正の値")
 
@@ -334,7 +337,7 @@ for rel in ["Application Support/com.example.foo/data.bin", "Caches/com.example.
             "Caches/Other/o.bin", "Saved Application State/com.example.foo.savedState/s.bin", "Containers/com.example.foo/k.bin"] { _ = mk("lib/\(rel)") }
 let rel = RelatedFinder.find(bundleID: "com.example.foo", appName: "Foo", library: lib)
 func relNames(_ k: RelatedFile.Kind) -> [String] { rel.filter { $0.kind == k }.map { $0.url.lastPathComponent }.sorted() }
-check(relNames(.bundleID) == ["ABCDE12345.com.example.foo", "com.example.foo", "com.example.foo", "com.example.foo.helper", "com.example.foo.plist", "com.example.foo.savedState"], "関連: Bundle ID 完全/前方/後方一致")
+check(relNames(.bundleID) == ["ABCDE12345.com.example.foo", "com.example.foo", "com.example.foo", "com.example.foo.plist", "com.example.foo.savedState"] && relNames(.bundlePrefix) == ["com.example.foo.helper"], "関連: Bundle ID 完全/前方/後方一致")
 check(relNames(.nameOnly) == ["Foo"], "関連: 名前のみ一致は区別される")
 check(!rel.contains { $0.url.lastPathComponent == "com.example.foobar" || $0.url.lastPathComponent == "Other" }, "関連: 無関係なものは除外")
 check(RelatedFinder.matchesBundleID("COM.Example.Foo.plist", "com.example.foo"), "関連: 大文字小文字を区別しない")
@@ -342,12 +345,12 @@ check(RelatedFinder.matchesBundleID("COM.Example.Foo.plist", "com.example.foo"),
 let target = AppCatalog.info(for: fooApp)!
 let selected = rel.filter { $0.kind == .bundleID }
 do {
-    _ = try AppUninstaller.uninstall(app: InstalledApp(url: target.url, name: "x", bundleID: "com.apple.finder", version: "", size: 0, lastUsed: nil, isAppStore: false), related: [], isRunning: false, library: lib, appRoots: [apps])
+    _ = try AppUninstaller.uninstall(app: InstalledApp(url: target.url, name: "x", bundleID: "com.apple.finder", version: "", size: 0, lastUsed: nil, isAppStore: false), related: [], isRunning: { false }, library: lib, appRoots: [apps])
     check(false, "Apple 製アプリは拒否")
 } catch { check(fm.fileExists(atPath: fooApp.path), "Apple 製アプリは拒否") }
-do { _ = try AppUninstaller.uninstall(app: target, related: [], isRunning: true, library: lib, appRoots: [apps]); check(false, "実行中は拒否") }
+do { _ = try AppUninstaller.uninstall(app: target, related: [], isRunning: { true }, library: lib, appRoots: [apps]); check(false, "実行中は拒否") }
 catch { check(fm.fileExists(atPath: fooApp.path), "実行中のアプリは拒否") }
-let ur = try? AppUninstaller.uninstall(app: target, related: selected, isRunning: false, library: lib, appRoots: [apps])
+let ur = try? AppUninstaller.uninstall(app: target, related: selected, isRunning: { false }, library: lib, appRoots: [apps])
 check(ur?.failed.isEmpty == true && !fm.fileExists(atPath: fooApp.path)
       && !fm.fileExists(atPath: lib.appendingPathComponent("Application Support/com.example.foo").path)
       && fm.fileExists(atPath: lib.appendingPathComponent("Application Support/Foo").path)
@@ -356,7 +359,7 @@ check(ur?.failed.isEmpty == true && !fm.fileExists(atPath: fooApp.path)
 let lib2 = mk("lib2", dir: true)
 for rel in ["Application Support/com.gone.app/a", "Application Support/com.example.bar/a", "Caches/com.example.bar.helper/a", "Application Support/com.apple.thing/a",
             "Application Support/PlainName/a", "Preferences/com.gone.pref.plist", "Containers/com.run.x/a", "Caches/com.example/a", "Application Support/com.gone.app2/a"] { _ = mk("lib2/\(rel)") }
-let lo = Leftovers.find(library: lib2, installedIDs: ["com.example.bar"], runningIDs: ["com.run.x"]).map(\.url.lastPathComponent).sorted()
+let lo = Leftovers.find(library: lib2, installedIDs: ["com.example.bar"], runningIDs: ["com.run.x"], isInstalled: { _ in false }).map(\.url.lastPathComponent).sorted()
 check(lo == ["com.gone.app", "com.gone.app2", "com.gone.pref.plist"], "残骸: 未インストールのID形式のみ(インストール済/実行中/Apple/非ID形式は除外)")
 check(Leftovers.looksLikeBundleID("com.foo.bar") && !Leftovers.looksLikeBundleID("com.foo") && !Leftovers.looksLikeBundleID("Google") && !Leftovers.looksLikeBundleID("a..b"), "Bundle ID 形式判定")
 
@@ -408,6 +411,160 @@ let tq = SecurityScanner.buildTargets(settings: ts, loginItems: [])
 check(tq.yara.map(\.path) == [dd.path, "/Applications"] && tq.clam.map(\.path) == [dd.path], "セキュリティ対象: 標準では ClamAV から /Applications を除外(YARA は全対象)")
 ts.deepScan = true
 check(SecurityScanner.buildTargets(settings: ts, loginItems: []).clam.map(\.path) == [dd.path, "/Applications"], "セキュリティ対象: じっくりでは ClamAV も /Applications を含む")
+
+
+// --- P6: 堅牢化 ---
+func runMain<T>(_ body: @MainActor @escaping () async -> T) -> T {
+    var out: T? = nil
+    Task { @MainActor in out = await body() }
+    while out == nil { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+    return out!
+}
+// ドットファイル除外
+let dotdir = mk("dot/Caches", dir: true)
+_ = mk("dot/Caches/.DS_Store"); _ = mk("dot/Caches/real.app/f")
+check((CleanupScanner.children(of: dotdir) ?? []).map(\.lastPathComponent) == ["real.app"], "クリーンアップ: .DS_Store などドットファイルを除外")
+// 実行中アプリ・提供元・プロセス名・never-clean
+var run2 = CleanupScanner.RunningInfo()
+run2.ids = ["com.google.chrome"]; run2.vendors = ["google"]; run2.names = ["claude", "codex", "node"]
+let rc = mk("run/Caches", dir: true)
+for n in ["Google", "claude-cli-nodejs", "Codex", "com.google.Chrome.helper", "ms-playwright", "CloudKit", "GeoServices", "PassKit", "GameKit", "FamilyCircle", "harmless.app", "nodemodules-cache"] { _ = mk("run/Caches/\(n)/f.bin") }
+let rr = CleanupScanner.userCacheItems(root: rc, otherCategoryNames: [], running: run2)
+check(rr.keep.map(\.lastPathComponent).sorted() == ["harmless.app", "nodemodules-cache"], "キャッシュ除外: 提供元/プロセス名/実行中ID/never-clean を除外")
+check(Set(rr.excluded.map(\.name)) == ["Google", "claude-cli-nodejs", "Codex", "com.google.Chrome.helper", "ms-playwright", "CloudKit", "GeoServices", "PassKit", "GameKit", "FamilyCircle"], "キャッシュ除外: 除外件数(10件)と一致")
+check(CleanupScanner.neverCleanCaches.keys.contains("ms-playwright") && CleanupScanner.neverCleanCaches.keys.contains("cloudkit"), "never-clean リスト")
+// iOS Wrapper アプリ / Containers 表示のみ
+let iosApp = apps.appendingPathComponent("iPadThing.app")
+try! fm.createDirectory(at: iosApp.appendingPathComponent("Wrapper/iPadThing.app"), withIntermediateDirectories: true)
+(["CFBundleIdentifier": "com.ios.thing", "CFBundleName": "iPadThing"] as NSDictionary).write(to: iosApp.appendingPathComponent("Wrapper/iPadThing.app/Info.plist"), atomically: true)
+check(AppCatalog.info(for: iosApp, withSize: false)?.bundleID == "com.ios.thing", "iOS Wrapper アプリのバンドルIDを取得")
+let lib3 = mk("lib3", dir: true)
+for rel in ["Application Support/com.ios.thing/a", "Containers/com.gone.container/a", "Group Containers/group.com.gone.group/a", "Caches/com.gone.cache/a", "Caches/com.system.knows/a", "Containers/com.ios.thing/a"] { _ = mk("lib3/\(rel)") }
+let lo3 = Leftovers.find(library: lib3, installedIDs: ["com.ios.thing"], runningIDs: [], isInstalled: { $0 == "com.system.knows" })
+check(lo3.map(\.url.lastPathComponent).sorted() == ["com.gone.cache", "com.gone.container", "group.com.gone.group"], "残骸: iOSアプリ/LaunchServices既知は除外")
+check(lo3.filter(\.displayOnly).map(\.url.lastPathComponent).sorted() == ["com.gone.container", "group.com.gone.group"] && lo3.first { $0.url.lastPathComponent == "com.gone.cache" }?.displayOnly == false, "残骸: Containers/Group Containers は表示のみ")
+check(Leftovers.deletable(lo3).map(\.url.lastPathComponent) == ["com.gone.cache"], "残骸: 削除対象に Containers を含まない")
+let fails = AppUninstaller.trashLeftovers(lo3, library: lib3)
+check(fails == 0 && !fm.fileExists(atPath: lib3.appendingPathComponent("Caches/com.gone.cache").path)
+      && fm.fileExists(atPath: lib3.appendingPathComponent("Containers/com.gone.container").path)
+      && fm.fileExists(atPath: lib3.appendingPathComponent("Group Containers/group.com.gone.group").path), "残骸: 実行しても Containers は残る")
+// 前方一致 vs 別アプリ
+let lib4 = mk("lib4", dir: true)
+for rel in ["Application Support/com.google.Chrome/a", "Application Support/com.google.Chrome.canary/a", "Caches/com.google.Chrome.helper/a", "Preferences/com.google.Chrome.plist", "Preferences/com.google.Chrome.canary.plist"] { _ = mk("lib4/\(rel)") }
+let rel4 = RelatedFinder.find(bundleID: "com.google.Chrome", appName: "Chrome", library: lib4, otherInstalledIDs: ["com.google.Chrome.canary", "com.google.Chrome"])
+check(rel4.map(\.url.lastPathComponent).sorted() == ["com.google.Chrome", "com.google.Chrome.helper", "com.google.Chrome.plist"], "関連: 別アプリ(canary)のデータは除外")
+check(rel4.first { $0.url.lastPathComponent == "com.google.Chrome.helper" }?.kind == .bundlePrefix && rel4.first { $0.url.lastPathComponent == "com.google.Chrome" }?.kind == .bundleID, "関連: 前方一致のみは別扱い(既定未選択)")
+let rel4c = RelatedFinder.find(bundleID: "com.google.Chrome.canary", appName: "Canary", library: lib4, otherInstalledIDs: ["com.google.Chrome.canary", "com.google.Chrome"])
+check(rel4c.map(\.url.lastPathComponent).sorted() == ["com.google.Chrome.canary", "com.google.Chrome.canary.plist"], "関連: canary 自身は自分のデータを検出")
+check(Set(RelatedFinder.allowedRoots(library: lib4).map(\.path)).isDisjoint(with: [lib4.path]), "アンインストール許可範囲に ~/Library 全体を含まない")
+// 拒否リスト追加
+let hm = NSHomeDirectory()
+for p in [hm + "/Library/Mobile Documents/x", hm + "/Library/CloudStorage/OneDrive/x", hm + "/Library/Keychains/login.keychain-db", hm + "/Library/Mail/V10",
+          hm + "/Library/Messages/chat.db", hm + "/Library/Accounts/a", hm + "/Library/Photos/x", hm + "/Library/Safari/History.db", hm + "/Library/Cookies/c",
+          hm + "/Library/Containers/com.apple.Safari", hm + "/Library/Containers/com.apple.Safari/Data/x", hm + "/Library/Group Containers/group.com.apple.notes/x",
+          hm + "/Pictures/My.photoslibrary", hm + "/Pictures/My.photoslibrary/originals/a.jpg", hm + "/Music/Music Library.musiclibrary/x",
+          hm + "/Desktop", hm + "/Documents", hm + "/Downloads", hm + "/Pictures", hm + "/Movies", hm + "/Music", hm + "/Public", hm + "/Applications",
+          hm + "/Library/Containers", hm + "/Library/Application Support"] {
+    expectThrows("拒否リスト(追加): \(p)") { try SafeTrash.trash(URL(fileURLWithPath: p), allowedRoots: slash) }
+}
+// 動画検証の強化
+let vOK = MediaInfo(duration: 10, videoCodec: "hevc", hasAudio: true)
+check(VideoCompressor.verify(input: MediaInfo(duration: 0, videoCodec: "h264", hasAudio: true), inputSize: 100, output: vOK, outputSize: 50) != nil, "検証: 入力の長さ0は失敗")
+check(VideoCompressor.verify(input: vOK, inputSize: 100, output: MediaInfo(duration: 0, videoCodec: "hevc", hasAudio: true), outputSize: 50) != nil, "検証: 出力の長さ0は失敗")
+check(VideoCompressor.verify(input: vOK, inputSize: 100, output: MediaInfo(duration: 10, videoCodec: "h264", hasAudio: true), outputSize: 50) != nil, "検証: 出力が HEVC でなければ失敗")
+// 確認ダイアログ
+_ = NSApplication.shared
+MainActor.assumeIsolated {
+    let al = Confirm.makeAlert(title: "t", message: "m", button: "削除")
+    check(al.buttons.count == 2 && al.buttons[0].title == "キャンセル" && al.buttons[0].keyEquivalent == "\r", "確認: キャンセルが既定ボタン(Return)")
+    check(al.buttons[1].title == "削除" && al.buttons[1].keyEquivalent == "" && al.buttons[1].hasDestructiveAction, "確認: 実行ボタンはキー割り当てなし・破壊的")
+}
+var invoked: [Int] = []
+let r1 = runMain { () -> Bool in
+    Confirm.presenter = { _, _, _ in false }
+    return await Confirm.destructive(title: "", message: "", button: "", snapshot: 1) { invoked.append($0) }
+}
+check(r1 == false && invoked.isEmpty, "確認: キャンセル時は action を実行しない")
+let r2 = runMain { () -> Bool in
+    var live = 1
+    Confirm.presenter = { _, _, _ in live = 99; return true }   // 表示中に共有状態が変わっても
+    let r = await Confirm.destructive(title: "", message: "", button: "", snapshot: live) { invoked.append($0) }
+    return r
+}
+check(r2 == true && invoked == [1], "確認: 実行時はスナップショットの値が渡される")
+// スナップショットのみを削除（共有の選択状態は使わない）
+let snapDir = mk("snap", dir: true)
+let fa = mk("snap/a.txt"), fb = mk("snap/b.txt")
+let cm = runMain { () -> (Bool, Bool, Set<String>) in
+    let m = CleanupModel()
+    m.selected = [fb.path]   // 共有の選択は b だが、確認済みスナップショットは a のみ
+    await m.cleanItems([CleanupJob(item: CleanupItem(url: fa, size: 1), roots: [snapDir])], settings: Settings(), rescan: false)
+    return (fm.fileExists(atPath: fa.path), fm.fileExists(atPath: fb.path), m.selected)
+}
+check(cm.0 == false && cm.1 == true && cm.2 == [fb.path], "スナップショット: 渡された項目のみ削除し、共有の選択は変更しない")
+// LargeFiles: 渡された roots の外は削除されない
+let lfDir = mk("lfsnap", dir: true), otherDir = mk("lfother", dir: true)
+let lf1 = mk("lfsnap/x.bin"), lf2 = mk("lfother/y.bin")
+_ = runMain { () -> Bool in
+    let m = LargeFilesModel()
+    await m.trash([LargeFile(url: lf1, size: 1, lastUsed: Date(), kind: ""), LargeFile(url: lf2, size: 1, lastUsed: Date(), kind: "")], roots: [lfDir])
+    return true
+}
+check(!fm.fileExists(atPath: lf1.path) && fm.fileExists(atPath: lf2.path), "大容量: 設定した検索範囲の外は削除されない")
+// スマートケア: 完了後に共有状態が変わっても結果に影響しない
+let st = runMain { () -> AppState in AppState() }
+let scRes = runMain { () -> SmartCareResult? in
+    st.smartCare.steps = SmartCareSteps(
+        cleanup: { s, _ in
+            let r: (junk: Int64, safeJunk: Int64) = (100, 40)
+            s.cleanup.categories = []          // ステップ後に共有状態が変わる（別の掃除など）
+            return r },
+        security: { _ in 2 }, loginItems: { _ in (1, 0) }, largeFiles: { _, _ in (3, 9) })
+    await st.smartCare.run(state: st)
+    return st.smartCare.result
+}
+check(scRes?.junkBytes == 100 && scRes?.safeJunkBytes == 40 && scRes?.threats == 2 && scRes?.newLoginItems == 1 && scRes?.largeFileCount == 3, "スマートケア: 結果はステップ出力から確定(共有状態を再読込しない)")
+// 並行スキャンは進行中の完了を待つ
+var cs = Settings(); cs.largeFileRoots = [mk("emptyroot", dir: true).path]
+let cc = runMain { () -> (Bool, Bool) in
+    let m = CleanupModel()
+    let first = Task { @MainActor in await m.scan(settings: cs) }
+    await Task.yield()
+    await m.scan(settings: cs)              // 進行中の1回目を待つ（即 return しない）
+    let afterSecond = (m.hasScanned, m.scanning)
+    await first.value
+    return afterSecond
+}
+check(cc.0 == true && cc.1 == false, "スキャン: 実行中なら完了を待ってから戻る")
+// ログイン項目の無効化
+let agents = mk("agents", dir: true)
+func loginItem(_ name: String) -> LoginItem {
+    let u = agents.appendingPathComponent(name + ".plist")
+    (["Label": name] as NSDictionary).write(to: u, atomically: true)
+    return LoginItem(label: name, plistURL: u, program: nil, runAtLoad: false, keepAlive: false, domain: .user, plistSHA256: "")
+}
+func sr(_ code: Int32, _ err: String = "") -> ShellResult? { ShellResult(stdout: "", stderr: err, exitCode: code) }
+let li1 = loginItem("com.t.fail")
+let dis1: Bool = await_sync { do { try await LoginItems.disable(li1, launchctl: { a in a[0] == "bootout" ? sr(5, "Boot-out failed: 5: Input/output error") : sr(113) }, agentsRoot: agents); return false } catch { return true } }
+check(dis1 && fm.fileExists(atPath: li1.plistURL.path), "ログイン項目: bootout 失敗なら plist はそのまま")
+let li2 = loginItem("com.t.notloaded")
+let dis2: Bool = await_sync { do { try await LoginItems.disable(li2, launchctl: { a in a[0] == "bootout" ? sr(3, "Boot-out failed: 3: No such process") : sr(113) }, agentsRoot: agents); return true } catch { return false } }
+check(dis2 && !fm.fileExists(atPath: li2.plistURL.path), "ログイン項目: 未ロード(No such process)は正常として plist を移動")
+let li3 = loginItem("com.t.still")
+let dis3: Bool = await_sync { do { try await LoginItems.disable(li3, launchctl: { a in a[0] == "bootout" ? sr(0) : sr(0) }, agentsRoot: agents); return false } catch { return true } }
+check(dis3 && fm.fileExists(atPath: li3.plistURL.path), "ログイン項目: bootout 後も読み込まれていれば plist はそのまま")
+let li4 = loginItem("com.t.ok")
+let dis4: Bool = await_sync { do { try await LoginItems.disable(li4, launchctl: { a in a[0] == "bootout" ? sr(0) : sr(113) }, agentsRoot: agents); return true } catch { return false } }
+check(dis4 && !fm.fileExists(atPath: li4.plistURL.path), "ログイン項目: bootout 成功＋消滅確認後に plist を移動")
+// アプリ内ファイルの検出
+check(SecurityModel.enclosingApp(of: "/Applications/Foo.app/Contents/MacOS/foo")?.lastPathComponent == "Foo.app" && SecurityModel.enclosingApp(of: "/Users/x/Downloads/a.bin") == nil, "セキュリティ: .app 内部のファイルを判定")
+// 実行中の再確認は削除直前に評価される
+var polled = 0
+let app5 = makeApp("Run.app", "com.example.run", "Run")
+let info5 = AppCatalog.info(for: app5, withSize: false)!
+let lib5 = mk("lib5", dir: true)
+do { _ = try AppUninstaller.uninstall(app: info5, related: [], isRunning: { polled += 1; return true }, library: lib5, appRoots: [apps]); check(false, "再確認で実行中なら拒否") }
+catch { check(polled == 1 && fm.fileExists(atPath: app5.path), "アンインストール: 削除直前に実行中を再確認して拒否") }
 
 // --- Security E2E（ツールが無ければ SKIP） ---
 func runSecurityTests() async {

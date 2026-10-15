@@ -5,7 +5,6 @@ struct LargeFilesView: View {
     @Environment(AppState.self) private var state
     @State private var selection = Set<String>()
     @State private var sortOrder = [KeyPathComparator(\LargeFile.size, order: .reverse)]
-    @State private var confirmTrash = false
 
     private var selectedFiles: [LargeFile] { state.largeFiles.files.filter { selection.contains($0.id) } }
 
@@ -47,7 +46,18 @@ struct LargeFilesView: View {
                         let n = state.compressQueue.add(selectedFiles.filter(\.isVideo).map(\.url))
                         m.message = n > 0 ? "\(n) 件を圧縮キューに追加しました。" : "追加できる動画がありません。"
                     }.disabled(!selectedFiles.contains(where: \.isVideo))
-                    Button("ゴミ箱へ") { confirmTrash = true }.disabled(selection.isEmpty)
+                    Button("ゴミ箱へ") {
+                        let targets = selectedFiles                              // 確認時点の内容で固定
+                        let roots = Settings.load().largeFileRoots.map { URL(fileURLWithPath: $0) }
+                        let msg = "\(targets.count) 件 / 合計 \(formatBytes(targets.reduce(0) { $0 + $1.size }))\n"
+                            + targets.prefix(8).map { "・" + $0.name }.joined(separator: "\n")
+                            + (targets.count > 8 ? "\n…ほか \(targets.count - 8) 件" : "")
+                        Task {
+                            let done = await Confirm.destructive(title: "選択した \(targets.count) 件をゴミ箱へ移動しますか？", message: msg,
+                                                                 button: "ゴミ箱へ移動", snapshot: targets) { await m.trash($0, roots: roots) }
+                            if done { selection = [] }
+                        }
+                    }.disabled(selection.isEmpty)
                 }
                 .padding()
             }
@@ -56,15 +66,6 @@ struct LargeFilesView: View {
             if state.consumeAutoScan("largeFiles") {
                 await m.scan(settings: Settings.load()); state.markAutoScanDone("largeFiles")
             }
-        }
-        .alert("選択した \(selection.count) 件をゴミ箱へ移動しますか？", isPresented: $confirmTrash) {
-            Button("ゴミ箱へ移動", role: .destructive) {
-                let t = selectedFiles
-                Task { await m.trash(t); selection = [] }
-            }
-            Button("キャンセル", role: .cancel) {}
-        } message: {
-            Text("合計 \(formatBytes(selectedFiles.reduce(0) { $0 + $1.size }))")
         }
     }
 }

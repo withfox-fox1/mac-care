@@ -9,6 +9,18 @@ struct CleanupItem: Identifiable, Hashable {
     var name: String { url.lastPathComponent }
 }
 
+/// 集計から除外した項目と、その理由
+struct ExcludedItem: Hashable {
+    let name: String
+    let reason: String
+}
+
+/// 削除対象のスナップショット（確認ダイアログで見せた内容と実行内容を一致させる）
+struct CleanupJob: Hashable {
+    let item: CleanupItem
+    let roots: [URL]
+}
+
 struct CleanupCategory: Identifiable {
     let id: String
     let name: String
@@ -18,6 +30,7 @@ struct CleanupCategory: Identifiable {
     let roots: [URL]
     var items: [CleanupItem]
     var skipped: Int
+    var excluded: [ExcludedItem] = []
     var size: Int64 { items.reduce(0) { $0 + $1.size } }
 }
 
@@ -46,12 +59,14 @@ enum CleanupScanner {
         return (total, c.n)
     }
 
+    /// 直下の項目（.DS_Store などドットで始まるものは除く）
     static func children(of dir: URL) -> [URL]? {
-        try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [])
+        (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: []))?
+            .filter { !$0.lastPathComponent.hasPrefix(".") }
     }
 
     static func makeCategory(id: String, name: String, summary: String, effect: String,
-                             roots: [URL], urls: [URL]) -> CleanupCategory {
+                             roots: [URL], urls: [URL], excluded: [ExcludedItem] = []) -> CleanupCategory {
         var skipped = 0
         var items: [CleanupItem] = []
         for u in urls {
@@ -61,16 +76,70 @@ enum CleanupScanner {
         }
         items.sort { $0.size > $1.size }
         return CleanupCategory(id: id, name: name, summary: summary, effect: effect,
-                               roots: roots, items: items, skipped: skipped)
+                               roots: roots, items: items, skipped: skipped, excluded: excluded)
     }
 
-    /// ~/Library/Caches 直下から、Apple 製・実行中アプリ・他分類で扱うものを除外
-    static func userCacheItems(root: URL, excludedNames: Set<String>, runningIDs: Set<String>) -> [URL] {
-        (children(of: root) ?? []).filter { u in
-            let n = u.lastPathComponent
-            return !n.hasPrefix("com.apple.") && !excludedNames.contains(n)
-                && !runningIDs.contains(n.lowercased())
+    /// 実行中のアプリ・プロセスの識別情報（キャッシュ名との照合用）
+    struct RunningInfo {
+        var ids: Set<String> = []        // バンドルID（小文字）
+        var names: Set<String> = []      // 実行ファイル名・表示名・プロセス名（小文字）
+        var vendors: Set<String> = []    // バンドルIDの提供元（com.google.* → google）
+
+        /// 名前が実行中のものに該当すれば理由を返す
+        func match(_ rawName: String) -> String? {
+            let n = rawName.lowercased()
+            if ids.contains(n) { return "実行中のアプリ(\(rawName))のキャッシュ" }
+            if ids.contains(where: { n.hasPrefix($0 + ".") }) { return "実行中のアプリのキャッシュ" }
+            if vendors.contains(n) { return "実行中のアプリの提供元(\(rawName))" }
+            for k in names where k.count >= 4 {
+                if n == k || n.hasPrefix(k + "-") || n.hasPrefix(k + " ") || n.hasPrefix(k + ".") || n.hasPrefix(k + "_") {
+                    return "実行中のプロセス(\(k))に関連"
+                }
+            }
+            return nil
         }
+
+        static func current(extraProcessNames: [String] = []) -> RunningInfo {
+            var r = RunningInfo()
+            for a in NSWorkspace.shared.runningApplications {
+                if let b = a.bundleIdentifier?.lowercased() {
+                    r.ids.insert(b)
+                    let parts = b.split(separator: ".")
+                    if parts.count >= 2 { r.vendors.insert(String(parts[1])) }
+                }
+                if let e = a.executableURL?.lastPathComponent { r.names.insert(e.lowercased()) }
+                if let n = a.localizedName { r.names.insert(n.lowercased()) }
+                if let u = a.bundleURL { r.names.insert(u.deletingPathExtension().lastPathComponent.lowercased()) }
+            }
+            for p in extraProcessNames { r.names.insert(p.lowercased()) }
+            return r
+        }
+    }
+
+    /// 再取得に時間がかかる・システムが管理するため掃除しないキャッシュ名（小文字）
+    static let neverCleanCaches: [String: String] = [
+        "ms-playwright": "ブラウザの再ダウンロードが必要になるため",
+        "cloudkit": "iCloud 同期の管理データのため",
+        "geoservices": "システムの位置情報キャッシュのため",
+        "passkit": "Wallet 関連のため",
+        "gamekit": "Game Center 関連のため",
+        "familycircle": "ファミリー共有関連のため",
+        "maccaretests": "MacCare 自身のテスト領域のため",
+    ]
+
+    /// ~/Library/Caches 直下から、除外すべきものを理由つきで取り除く
+    static func userCacheItems(root: URL, otherCategoryNames: Set<String>, running: RunningInfo)
+        -> (keep: [URL], excluded: [ExcludedItem]) {
+        var keep: [URL] = [], ex: [ExcludedItem] = []
+        for u in children(of: root) ?? [] {
+            let n = u.lastPathComponent, l = n.lowercased()
+            if l.hasPrefix("com.apple.") { ex.append(ExcludedItem(name: n, reason: "Apple 製のため")); continue }
+            if let why = neverCleanCaches[l] { ex.append(ExcludedItem(name: n, reason: why)); continue }
+            if otherCategoryNames.contains(n) { ex.append(ExcludedItem(name: n, reason: "別の分類で集計")); continue }
+            if let why = running.match(n) { ex.append(ExcludedItem(name: n, reason: why)); continue }
+            keep.append(u)
+        }
+        return (keep, ex)
     }
 
     /// 検索範囲から未更新の node_modules を探す
@@ -110,7 +179,7 @@ enum CleanupScanner {
         return found
     }
 
-    static func scanAll(settings: Settings, brewCache: URL?, runningIDs: Set<String>,
+    static func scanAll(settings: Settings, brewCache: URL?, running: RunningInfo,
                         progress: (String) -> Void) -> [CleanupCategory] {
         let fm = FileManager.default
         let caches = home.appendingPathComponent("Library/Caches")
@@ -124,17 +193,17 @@ enum CleanupScanner {
                                     roots: [root], urls: children(of: root) ?? []))
         }
 
-        var excluded: Set<String> = ["pip", "MacCareTests"]
+        var excluded: Set<String> = ["pip"]
         if let b = brewCache, b.deletingLastPathComponent().standardizedFileURL.path == caches.path {
             excluded.insert(b.lastPathComponent)
         }
         progress("ユーザーキャッシュ")
+        let uc = userCacheItems(root: caches, otherCategoryNames: excluded, running: running)
         out.append(makeCategory(
             id: "caches", name: "ユーザーキャッシュ",
             summary: "~/Library/Caches 内のアプリのキャッシュ（Apple 製・実行中のアプリを除く）。",
             effect: "次回起動時にキャッシュが再生成されます。初回のみ動作が遅くなることがあります。",
-            roots: [caches],
-            urls: userCacheItems(root: caches, excludedNames: excluded, runningIDs: runningIDs)))
+            roots: [caches], urls: uc.keep, excluded: uc.excluded))
         dirCategory("logs", "ユーザーログ", "~/Library/Logs 内のログファイル。",
                     "過去のログが失われます。アプリの動作には影響しません。",
                     home.appendingPathComponent("Library/Logs"))
@@ -164,7 +233,7 @@ enum CleanupScanner {
             summary: "\(settings.nodeModulesStaleDays) 日以上更新のないプロジェクトの node_modules。",
             effect: "npm install で復元できます。",
             roots: nmRoots, urls: staleNodeModules(roots: nmRoots, staleDays: settings.nodeModulesStaleDays)))
-        return out.filter { !$0.items.isEmpty || $0.skipped > 0 }
+        return out.filter { !$0.items.isEmpty || $0.skipped > 0 || !$0.excluded.isEmpty }
     }
 }
 
@@ -189,23 +258,38 @@ final class CleanupModel {
     var hasScanned = false
     var trashReadable = false
     var trashSize: Int64 = 0
+    private var scanTask: Task<Void, Never>?
 
-    var selectedSize: Int64 {
-        categories.flatMap { $0.items }.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.size }
+    var excludedCount: Int { categories.reduce(0) { $0 + $1.excluded.count } }
+
+    /// 現在の選択内容のスナップショット（確認ダイアログ表示時点の内容で固定する）
+    func snapshotSelected() -> [CleanupJob] {
+        categories.flatMap { c in c.items.filter { selected.contains($0.id) }.map { CleanupJob(item: $0, roots: c.roots) } }
     }
+
+    static func summary(of jobs: [CleanupJob], categories: [CleanupCategory]) -> String {
+        let ids = Set(jobs.map(\.item.id))
+        let lines = categories.compactMap { c -> String? in
+            let hit = c.items.filter { ids.contains($0.id) }
+            guard !hit.isEmpty else { return nil }
+            return "\(c.name): \(hit.count) 件 / \(formatBytes(hit.reduce(0) { $0 + $1.size }))"
+        }
+        return lines.joined(separator: "\n") + "\n\n合計 \(jobs.count) 件 / \(formatBytes(jobs.reduce(0) { $0 + $1.item.size }))"
+    }
+
+    var selectedSize: Int64 { snapshotSelected().reduce(0) { $0 + $1.item.size } }
     var selectedCount: Int { selected.count }
 
-    var confirmationSummary: String {
-        let lines = categories.compactMap { c -> String? in
-            let ids = c.items.filter { selected.contains($0.id) }
-            guard !ids.isEmpty else { return nil }
-            return "\(c.name): \(ids.count) 件 / \(formatBytes(ids.reduce(0) { $0 + $1.size }))"
-        }
-        return lines.joined(separator: "\n") + "\n\n合計 \(selectedCount) 件 / \(formatBytes(selectedSize))"
+    /// 実行中のスキャンがあればその完了を待つ（呼び出し側が古い状態を読まないようにする）
+    func scan(settings: Settings) async {
+        if let t = scanTask { await t.value; return }
+        let t = Task { await self.performScan(settings: settings) }
+        scanTask = t
+        await t.value
+        scanTask = nil
     }
 
-    func scan(settings: Settings) async {
-        guard !scanning else { return }
+    private func performScan(settings: Settings) async {
         scanning = true; message = nil; lastFreed = nil
         var brewURL: URL? = nil
         if let brew = Tools.path("brew"),
@@ -215,9 +299,14 @@ final class CleanupModel {
             // ホーム配下のパスのみ採用
             if !p.isEmpty, SafeTrash.isInside(u, of: CleanupScanner.home) { brewURL = u }
         }
-        let running = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier?.lowercased() })
+        // GUI アプリ以外（node / claude など）の実行中プロセス名も取得
+        var procs: [String] = []
+        if let r = try? await Shell.run("/bin/ps", ["-axco", "comm"]) {
+            procs = r.stdout.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+        }
+        let running = CleanupScanner.RunningInfo.current(extraProcessNames: procs)
         let cats = await Task.detached(priority: .userInitiated) { [weak self] () -> [CleanupCategory] in
-            CleanupScanner.scanAll(settings: settings, brewCache: brewURL, runningIDs: running) { t in
+            CleanupScanner.scanAll(settings: settings, brewCache: brewURL, running: running) { t in
                 Task { @MainActor in self?.progressText = t + " を集計中…" }
             }
         }.value
@@ -229,17 +318,14 @@ final class CleanupModel {
         hasScanned = true; scanning = false; progressText = ""
     }
 
-    /// 選択項目をゴミ箱へ。各項目は SafeTrash を通す。
-    func cleanSelected(settings: Settings) async {
-        guard !cleaning else { return }
+    /// スナップショットされた項目のみをゴミ箱へ（SafeTrash 経由）。共有の選択状態は読まない・変更しない。
+    func cleanItems(_ jobs: [CleanupJob], settings: Settings, rescan: Bool = true) async {
+        guard !cleaning else { message = "別の掃除が実行中のため、何も削除しませんでした。"; return }
         cleaning = true
-        let jobs: [(CleanupItem, [URL])] = categories.flatMap { c in
-            c.items.filter { selected.contains($0.id) }.map { ($0, c.roots) }
-        }
         let result = await Task.detached(priority: .userInitiated) { () -> (Int64, Int) in
             var freed: Int64 = 0, failed = 0
-            for (item, roots) in jobs {
-                do { try SafeTrash.trash(item.url, allowedRoots: roots); freed += item.size }
+            for j in jobs {
+                do { try SafeTrash.trash(j.item.url, allowedRoots: j.roots); freed += j.item.size }
                 catch { failed += 1 }
             }
             return (freed, failed)
@@ -247,23 +333,28 @@ final class CleanupModel {
         try? History.append(HistoryEntry(date: Date(), kind: .cleanup, target: "\(jobs.count) 件",
                                          bytes: result.0, result: result.1 == 0 ? "ok" : "partial",
                                          detail: "失敗 \(result.1) 件"))
-        selected = []
+        let done = Set(jobs.map(\.item.id))
+        selected.subtract(done)
         cleaning = false
-        await scan(settings: settings)
+        if rescan { await scan(settings: settings) }
         lastFreed = result.0
         if result.1 > 0 { message = "\(result.1) 件を移動できませんでした。" }
     }
 
-    /// ゴミ箱を空にする（完全削除）。Finder 経由。
+    /// ゴミ箱を空にする（完全削除）。Finder 経由。AppleScript はメインスレッド外で実行する。
     func emptyTrash(settings: Settings) async {
         let before = trashSize
-        var err: NSDictionary?
-        let script = NSAppleScript(source: "tell application \"Finder\" to empty trash")
-        script?.executeAndReturnError(&err)
+        let err: String? = await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var e: NSDictionary?
+                NSAppleScript(source: "tell application \"Finder\" to empty trash")?.executeAndReturnError(&e)
+                cont.resume(returning: e.map { "\($0)" })
+            }
+        }
         let ok = (err == nil)
         try? History.append(HistoryEntry(date: Date(), kind: .cleanup, target: "~/.Trash", bytes: ok ? before : 0,
                                          result: ok ? "ok" : "failed",
-                                         detail: ok ? "ゴミ箱を空にしました" : "\(err ?? [:])"))
+                                         detail: ok ? "ゴミ箱を空にしました" : (err ?? "")))
         message = ok ? nil : "ゴミ箱を空にできませんでした（Finder の自動操作が許可されているか確認してください）。"
         await scan(settings: settings)
         if ok { lastFreed = before }

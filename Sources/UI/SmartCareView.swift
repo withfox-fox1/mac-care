@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SmartCareView: View {
     @Environment(AppState.self) private var state
-    @State private var confirmTrash = false
 
     private func go(_ section: String) { state.requestedSection = section }
 
@@ -52,7 +51,16 @@ struct SmartCareView: View {
                             }
                             Spacer()
                             if let f = state.cleanup.lastFreed { Text("解放: \(formatBytes(f))").foregroundStyle(.green).bold() }
-                            Button("不要データをゴミ箱へ…") { confirmTrash = true }
+                            Button("不要データをゴミ箱へ…") {
+                                let jobs = SmartCare.safeJobs(state.cleanup.categories)   // 確認時点の内容で固定
+                                let msg = CleanupModel.summary(of: jobs, categories: SmartCare.safeCategories(state.cleanup.categories))
+                                Task {
+                                    await Confirm.destructive(title: "不要データをゴミ箱へ移動しますか？", message: msg,
+                                                              button: "ゴミ箱へ移動", snapshot: jobs) {
+                                        await m.trashSafe($0, state: state)
+                                    }
+                                }
+                            }
                                 .disabled(r.safeJunkBytes == 0 || state.cleanup.cleaning || m.running)
                         }
                         .padding(14).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
@@ -68,14 +76,6 @@ struct SmartCareView: View {
             if state.consumeAutoScan("smartCare") {
                 await m.run(state: state); state.markAutoScanDone("smartCare")
             }
-        }
-        .alert("不要データをゴミ箱へ移動しますか？", isPresented: $confirmTrash) {
-            Button("ゴミ箱へ移動", role: .destructive) { Task { await m.trashSafe(state: state) } }
-            Button("キャンセル", role: .cancel) {}
-        } message: {
-            let safe = SmartCare.safeCategories(state.cleanup.categories)
-            Text(safe.map { "\($0.name): \(formatBytes($0.size))" }.joined(separator: "\n")
-                 + "\n\n合計 \(formatBytes(safe.reduce(0) { $0 + $1.size }))（ゴミ箱へ移動します）")
         }
     }
 

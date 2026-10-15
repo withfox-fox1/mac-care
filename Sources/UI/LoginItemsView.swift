@@ -3,7 +3,6 @@ import AppKit
 
 struct LoginItemsView: View {
     @Environment(AppState.self) private var state
-    @State private var target: LoginItem? = nil
 
     var body: some View {
         let m = state.loginItems
@@ -39,17 +38,22 @@ struct LoginItemsView: View {
                             }
                             Spacer()
                             Button("Finderで表示") { NSWorkspace.shared.activateFileViewerSelecting([it.plistURL]) }
-                            if it.domain == .user { Button("無効化…", role: .destructive) { target = it } }
+                            if it.domain == .user {
+                                Button("無効化…", role: .destructive) {
+                                    let snap = it   // 確認時点の内容で固定
+                                    Task {
+                                        await Confirm.destructive(title: "この項目を無効化しますか？",
+                                                                  message: "launchctl bootout で停止し、plist をゴミ箱へ移動します。\n\(snap.plistURL.path)",
+                                                                  button: "無効化してゴミ箱へ", snapshot: snap) { await m.disable($0) }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
         .task { if state.consumeAutoScan("loginItems") { await m.scan(); state.markAutoScanDone("loginItems") } }
-        .alert("この項目を無効化しますか？", isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } })) {
-            Button("無効化してゴミ箱へ", role: .destructive) { if let t = target { Task { await m.disable(t) } }; target = nil }
-            Button("キャンセル", role: .cancel) { target = nil }
-        } message: { Text("launchctl bootout で停止し、plist をゴミ箱へ移動します。\n\(target?.plistURL.path ?? "")") }
     }
 
     private func badge(_ t: String, _ c: Color) -> some View {

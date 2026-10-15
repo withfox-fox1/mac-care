@@ -3,7 +3,6 @@ import AppKit
 
 struct SecurityView: View {
     @Environment(AppState.self) private var state
-    @State private var confirmTrash: Detection? = nil
 
     var body: some View {
         let m = state.security
@@ -44,7 +43,20 @@ struct SecurityView: View {
                                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: d.path)])
                                     }
                                     Button("無視") { m.ignore(d) }
-                                    Button("ゴミ箱へ", role: .destructive) { confirmTrash = d }
+                                    if SecurityModel.enclosingApp(of: d.path) != nil {
+                                        Button("アプリ単位で削除…") { state.requestedSection = "apps" }
+                                    } else {
+                                        Button("ゴミ箱へ", role: .destructive) {
+                                            let snap = d   // 確認時点の内容で固定
+                                            Task {
+                                                await Confirm.destructive(title: "このファイルをゴミ箱へ移動しますか？", message: snap.path,
+                                                                          button: "ゴミ箱へ移動", snapshot: snap) { m.trash($0) }
+                                            }
+                                        }
+                                    }
+                                }
+                                if SecurityModel.enclosingApp(of: d.path) != nil {
+                                    Text("アプリ内部のファイルのため、単独では削除できません（アプリ単位で削除してください）。").font(.caption).foregroundStyle(.orange)
                                 }
                                 Text(d.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                             }
@@ -61,9 +73,5 @@ struct SecurityView: View {
             if state.consumeAutoScan("security") { m.start(state: state) }
         }
         .onChange(of: m.running) { _, now in if !now { state.markAutoScanDone("security") } }
-        .alert("このファイルをゴミ箱へ移動しますか？", isPresented: Binding(get: { confirmTrash != nil }, set: { if !$0 { confirmTrash = nil } })) {
-            Button("ゴミ箱へ移動", role: .destructive) { if let d = confirmTrash { m.trash(d) }; confirmTrash = nil }
-            Button("キャンセル", role: .cancel) { confirmTrash = nil }
-        } message: { Text(confirmTrash?.path ?? "") }
     }
 }

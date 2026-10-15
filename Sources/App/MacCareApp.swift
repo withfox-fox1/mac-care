@@ -3,6 +3,10 @@ import AppKit
 
 /// 起動済みアプリの再クリック（Finder / Launchpad / open -a）でウィンドウを開く
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        ChildRegistry.terminateAll()   // 一時停止中のものを含め ffmpeg 等の子プロセスを止める
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { Task { @MainActor in WindowOpener.open() } }
         return true
@@ -21,29 +25,33 @@ enum WindowOpener {
         bringToFront()
     }
 
-    /// メインウィンドウを最前面・キーウィンドウにする。
-    /// 表示直後は未生成・非表示のことがあるため、可視になるまで間隔を空けて再試行する。
+    private static var lastFront = Date.distantPast
+
+    /// ウィンドウを開いた直後に一度だけ前面化する。まだ見えていなければ 0.5 秒後に 1 回だけ再試行する。
+    /// 確認ダイアログ（モーダル）表示中は何もしない。
     static func bringToFront() {
+        guard Date().timeIntervalSince(lastFront) > 1.0 else { return }   // 連続呼び出しを1回にまとめる
+        lastFront = Date()
+        func visible() -> Bool {
+            NSApp.windows.contains {
+                !($0 is NSPanel) && $0.canBecomeMain && $0.isVisible && $0.isOnActiveSpace && $0.occlusionState.contains(.visible)
+            }
+        }
         func front() {
+            guard NSApp.modalWindow == nil else { return }
             if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
-            NSApp.unhide(nil)
             NSApp.activate(ignoringOtherApps: true)
             for w in NSApp.windows where !(w is NSPanel) && w.canBecomeMain {
                 if w.isMiniaturized { w.deminiaturize(nil) }
                 w.collectionBehavior.insert(.moveToActiveSpace)   // 別の Space で開かないようにする
                 w.makeKeyAndOrderFront(nil)
-                w.orderFrontRegardless()
             }
         }
         front()
-        for delay in [0.2, 0.6, 1.2, 2.5, 4.0, 6.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                let visible = NSApp.windows.contains {
-                    !($0 is NSPanel) && $0.canBecomeMain && $0.isVisible && $0.isOnActiveSpace && $0.occlusionState.contains(.visible)
-                }
-                if !visible { action?() }   // openWindow を再実行して既存ウィンドウを前面に出す
-                if !visible || delay < 1 { front() }
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard NSApp.modalWindow == nil, !visible() else { return }
+            action?()   // openWindow を再実行して既存ウィンドウを前面に出す
+            front()
         }
     }
 

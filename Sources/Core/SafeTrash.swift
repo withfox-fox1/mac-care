@@ -27,11 +27,31 @@ enum SafeTrash {
     /// ちょうどその場所だけ拒否
     private static func denyExact() -> [String] {
         ["/", "/System", "/Library", "/Applications", "/usr", "/bin", "/sbin", "/private",
-         home, home + "/Library"]
+         home, home + "/Library",
+         home + "/Library/Containers", home + "/Library/Group Containers", home + "/Library/Application Support"]
+        + ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public", "Applications"].map { home + "/" + $0 }
     }
     /// その配下すべてと、それを含む祖先を拒否
     private static func denyTrees() -> [String] {
         [home + "/Library/Application Support/Claude/vm_bundles", home + "/voicevox_engine"]
+        + ["Mobile Documents", "CloudStorage", "Keychains", "Mail", "Messages", "Accounts", "Photos", "Safari", "Cookies"]
+            .map { home + "/Library/" + $0 }
+    }
+
+    /// パターンで保護する対象（メディアライブラリ、Apple 製コンテナ）
+    private static func isProtectedPattern(_ u: URL) -> Bool {
+        let c = comps(u)
+        // *.photoslibrary / *.musiclibrary 等はパス要素のどこにあっても拒否（ライブラリ内部・自体とも）
+        for x in c {
+            let ext = (x as NSString).pathExtension.lowercased()
+            if ["photoslibrary", "musiclibrary", "tvlibrary", "photolibrary"].contains(ext) { return true }
+        }
+        let h = comps(URL(fileURLWithPath: home))
+        guard c.count >= h.count + 3, Array(c.prefix(h.count)) == h, c[h.count] == "Library" else { return false }
+        let kind = c[h.count + 1], name = c[h.count + 2].lowercased()
+        if kind == "Containers" && name.hasPrefix("com.apple.") { return true }
+        if kind == "Group Containers" && name.hasPrefix("group.com.apple.") { return true }
+        return false
     }
 
     private static func comps(_ url: URL) -> [String] { url.pathComponents }
@@ -49,6 +69,7 @@ enum SafeTrash {
 
     private static func isDenied(_ url: URL) -> Bool {
         let u = resolved(url)
+        if isProtectedPattern(u) { return true }
         for p in denyExact() where comps(resolved(URL(fileURLWithPath: p))) == comps(u) { return true }
         for p in denyTrees() {
             let t = resolved(URL(fileURLWithPath: p))

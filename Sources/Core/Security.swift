@@ -295,7 +295,22 @@ final class SecurityModel {
                                          detail: "\(report.summary)、\(report.deep ? "じっくり" : "標準")モード、無視 \(report.hidden) 件、\(Int(report.duration)) 秒"))
     }
 
+    /// アプリバンドル内のファイルか（含まれる .app を返す）
+    nonisolated static func enclosingApp(of path: String) -> URL? {
+        var u = URL(fileURLWithPath: path).deletingLastPathComponent()
+        while u.pathComponents.count > 1 {
+            if u.pathExtension.lowercased() == "app" { return u }
+            u = u.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    /// 確認済みのスナップショットの検出1件をゴミ箱へ。アプリ内部のファイルは単独では削除しない。
     func trash(_ d: Detection) {
+        if SecurityModel.enclosingApp(of: d.path) != nil {
+            message = "アプリ内部のファイルは単独で削除できません。アプリ単位で削除してください（アプリケーション画面または Finder）。"
+            return
+        }
         let home = URL(fileURLWithPath: NSHomeDirectory())
         do {
             try SafeTrash.trash(URL(fileURLWithPath: d.path), allowedRoots: [home, URL(fileURLWithPath: "/Applications")])

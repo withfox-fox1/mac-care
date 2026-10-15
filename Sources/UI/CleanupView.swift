@@ -3,8 +3,6 @@ import AppKit
 
 struct CleanupView: View {
     @Environment(AppState.self) private var state
-    @State private var confirmClean = false
-    @State private var confirmEmpty = false
 
     var body: some View {
         let m = state.cleanup
@@ -13,6 +11,7 @@ struct CleanupView: View {
                 ProgressView().controlSize(.small)
                 Text(m.cleaning ? "ゴミ箱へ移動中…" : m.progressText).foregroundStyle(.secondary)
             }
+            if m.excludedCount > 0 { Text("除外 \(m.excludedCount) 件").font(.caption).foregroundStyle(.secondary) }
             if let f = m.lastFreed { Text("解放: \(formatBytes(f))").foregroundStyle(.green).bold() }
             Button(m.hasScanned ? "再スキャン" : "スキャン") {
                 Task { await m.scan(settings: Settings.load()) }
@@ -38,7 +37,16 @@ struct CleanupView: View {
                 HStack {
                     Text("選択中: \(m.selectedCount) 件 / \(formatBytes(m.selectedSize))")
                     Spacer()
-                    Button("選択した項目をゴミ箱へ") { confirmClean = true }
+                    Button("選択した項目をゴミ箱へ") {
+                        let jobs = m.snapshotSelected()   // 確認時点の内容で固定
+                        let msg = CleanupModel.summary(of: jobs, categories: m.categories)
+                        Task {
+                            await Confirm.destructive(title: "選択した項目をゴミ箱へ移動しますか？", message: msg,
+                                                      button: "ゴミ箱へ移動", snapshot: jobs) {
+                                await m.cleanItems($0, settings: Settings.load())
+                            }
+                        }
+                    }
                         .disabled(m.selectedCount == 0 || m.scanning || m.cleaning)
                 }
                 .padding()
@@ -49,14 +57,6 @@ struct CleanupView: View {
                 await m.scan(settings: Settings.load()); state.markAutoScanDone("cleanup")
             }
         }
-        .alert("選択した項目をゴミ箱へ移動しますか？", isPresented: $confirmClean) {
-            Button("ゴミ箱へ移動", role: .destructive) { Task { await m.cleanSelected(settings: Settings.load()) } }
-            Button("キャンセル", role: .cancel) {}
-        } message: { Text(m.confirmationSummary) }
-        .alert("ゴミ箱を空にしますか？", isPresented: $confirmEmpty) {
-            Button("完全に削除", role: .destructive) { Task { await m.emptyTrash(settings: Settings.load()) } }
-            Button("キャンセル", role: .cancel) {}
-        } message: { Text("この操作は取り消せません。ゴミ箱内の \(formatBytes(m.trashSize)) が完全に削除されます。") }
     }
 
     @ViewBuilder private func trashSection(_ m: CleanupModel) -> some View {
@@ -64,7 +64,16 @@ struct CleanupView: View {
             HStack {
                 Text("ゴミ箱の中身: \(formatBytes(m.trashSize))")
                 Spacer()
-                Button("ゴミ箱を空にする") { confirmEmpty = true }.disabled(m.trashSize == 0)
+                Button("ゴミ箱を空にする") {
+                    let size = m.trashSize
+                    Task {
+                        await Confirm.destructive(title: "ゴミ箱を空にしますか？",
+                                                  message: "この操作は取り消せません。ゴミ箱内の \(formatBytes(size)) が完全に削除されます。",
+                                                  button: "完全に削除", snapshot: size) { _ in
+                            await m.emptyTrash(settings: Settings.load())
+                        }
+                    }
+                }.disabled(m.trashSize == 0)
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -101,6 +110,17 @@ private struct CategoryRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(category.summary)
                 Text("消すと: \(category.effect)").foregroundStyle(.secondary)
+                if !category.excluded.isEmpty {
+                    DisclosureGroup("除外した項目 \(category.excluded.count) 件") {
+                        ForEach(category.excluded, id: \.self) { e in
+                            HStack {
+                                Text(e.name).lineLimit(1).truncationMode(.middle)
+                                Spacer()
+                                Text(e.reason).foregroundStyle(.secondary)
+                            }.font(.caption)
+                        }
+                    }.font(.caption)
+                }
                 if category.skipped > 0 {
                     Text("読み取れず除外: \(category.skipped) 件").font(.caption).foregroundStyle(.orange)
                 }
