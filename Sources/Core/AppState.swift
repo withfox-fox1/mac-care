@@ -19,6 +19,7 @@ final class AppState {
     let loginItems = LoginItemsModel()
     let smartCare = SmartCareModel()
     let scheduler = Scheduler()
+    let update = UpdateModel()
     let metrics = MetricsModel()
     /// 通知の許可状態（nil = 未確認）
     var notificationsAuthorized: Bool? = nil
@@ -35,6 +36,8 @@ final class AppState {
         backgroundStarted = true
         LaunchAtLogin.initializeIfNeeded()
         scheduler.start(state: self)
+        update.resolvePending()
+        update.startDailyCheck()
         if let r = smartCare.result {
             lastScanSummary = "前回: \(r.date.formatted(date: .abbreviated, time: .shortened)) / \(r.summary)"
         }
@@ -84,7 +87,9 @@ final class AppState {
             cleanMyMacItems: loginItems.items.filter { $0.label.lowercased().contains("com.macpaw") }.count,
             notificationsAuthorized: notificationsAuthorized,
             fullDiskAccessMissing: cleanup.hasScanned ? !cleanup.trashReadable : nil,
-            threats: r?.threats ?? 0, junkBytes: r?.junkBytes ?? 0, lastSmartCare: r?.date, now: Date())
+            threats: r?.threats ?? 0, junkBytes: r?.junkBytes ?? 0, lastSmartCare: r?.date, now: Date(),
+            updateAvailable: update.availableCount,
+            wakeSuggested: settings.scheduledScanEnabled && !settings.wakeForScan && !settings.wakeSuggestionDismissed)
     }
     var recommendations: [Recommendation] { Recommendations.all(recommendationInput) }
 

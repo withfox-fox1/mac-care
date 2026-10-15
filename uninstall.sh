@@ -14,6 +14,13 @@ if [[ -x "$APP/Contents/MacOS/MacCare" ]]; then
 fi
 pkill -x MacCare 2>/dev/null || true
 
+# MacCare が設定した起床スケジュール（pmset repeat）があれば解除する
+if [[ -f "$DATA/settings.json" ]] && grep -Eq '"wakeForScan"[[:space:]]*:[[:space:]]*true' "$DATA/settings.json"; then
+  echo "MacCare はフルスキャンのためにスリープからの自動起床（pmset repeat）を設定しています。"
+  echo "解除には管理者権限が必要です。パスワードの入力を求められます。"
+  sudo /usr/bin/pmset repeat cancel || echo "警告: 解除できませんでした。あとで 'sudo pmset repeat cancel' を実行してください。" >&2
+fi
+
 if [[ -d "$APP" ]]; then
   rm -rf "$APP"
   echo "削除: $APP"

@@ -7,7 +7,7 @@ enum RecAction: Equatable {
 }
 
 struct Recommendation: Equatable, Identifiable {
-    enum Kind: String { case threats, videos, cleanMyMac, junk, staleScan, notifications, fullDiskAccess }
+    enum Kind: String { case threats, videos, cleanMyMac, junk, appUpdate, staleScan, wakeSchedule, notifications, fullDiskAccess }
     var kind: Kind
     var symbol: String
     var title: String
@@ -29,6 +29,10 @@ struct RecommendationInput {
     var junkBytes: Int64 = 0
     var lastSmartCare: Date? = nil
     var now = Date()
+    /// MacCare 自体の更新件数
+    var updateAvailable = 0
+    /// 「スリープ中でも起こしてスキャン」の提案を出すか
+    var wakeSuggested = false
 }
 
 enum Recommendations {
@@ -60,11 +64,19 @@ enum Recommendations {
             out.append(Recommendation(kind: .junk, symbol: "sparkles", title: "不要データを掃除",
                                       detail: "\(formatBytes(i.junkBytes)) の不要データがあります", actionLabel: "掃除する", action: .navigate("cleanup")))
         }
+        if i.updateAvailable > 0 {
+            out.append(Recommendation(kind: .appUpdate, symbol: "arrow.down.circle.fill", title: "MacCare のアップデートがあります",
+                                      detail: "\(i.updateAvailable) 件の更新を取り込めます", actionLabel: "設定を開く", action: .navigate("settings")))
+        }
         let stale = i.lastSmartCare.map { i.now.timeIntervalSince($0) > 7 * 86400 } ?? true
         if stale {
             out.append(Recommendation(kind: .staleScan, symbol: "arrow.triangle.2.circlepath", title: "スマートケアを実行",
                                       detail: i.lastSmartCare == nil ? "まだスマートケアを実行していません" : "前回のスキャンから 7 日以上経っています",
                                       actionLabel: "実行する", action: .runSmartCare))
+        }
+        if i.wakeSuggested {
+            out.append(Recommendation(kind: .wakeSchedule, symbol: "moon.zzz.fill", title: "スリープ中でも起こしてフルスキャン",
+                                      detail: "毎日のフルスキャン前に Mac を自動で起こします（管理者パスワードが必要）", actionLabel: "設定を開く", action: .navigate("settings")))
         }
         if i.notificationsAuthorized == false {
             out.append(Recommendation(kind: .notifications, symbol: "bell.fill", title: "通知をオンにする",

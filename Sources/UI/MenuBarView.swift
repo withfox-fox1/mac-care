@@ -94,7 +94,25 @@ struct MenuBarView: View {
         .padding(.bottom, 4)
     }
 
-    private var securityCard: some View {
+    /// スキャン中は進捗（%・残り時間・現在の処理）を表示する
+    private var progressCard: some View {
+        let sc = state.smartCare, sec = state.security
+        let care = sc.running
+        return CardView(padding: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                IconTile(symbol: "checkmark.shield.fill", color: Theme.security, size: 30, filled: false)
+                ScanProgressBlock(fraction: care ? sc.progress : sec.fraction, etaText: care ? sc.etaText : sec.etaText,
+                                  stepText: care ? sc.statusText : sec.step.rawValue, detailText: sec.detail)
+            }
+        }
+        .contentShape(Rectangle()).onTapGesture { openMain(care ? "dashboard" : "security") }
+    }
+
+    @ViewBuilder private var securityCard: some View {
+        if state.smartCare.running || state.security.running { progressCard } else { idleSecurityCard }
+    }
+
+    private var idleSecurityCard: some View {
         let r = state.smartCare.result
         let threats = r?.threats ?? 0
         return CardView(padding: 12) {

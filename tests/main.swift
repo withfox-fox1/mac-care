@@ -98,15 +98,15 @@ check(!SafeTrash.isInside(URL(fileURLWithPath: "/a/bc"), of: URL(fileURLWithPath
 
 // --- Storage ---
 var s = Settings()
-check(s.largeFileThresholdMB == 500 && s.nodeModulesStaleDays == 90 && s.scanIntervalDays == 7
+check(s.largeFileThresholdMB == 500 && s.nodeModulesStaleDays == 90 && s.fullScanHour == 0 && s.fullScanMinute == 0 && s.quickScan
       && s.scheduledScanEnabled && s.lastScheduledRun == nil && s.largeFileRoots == [NSHomeDirectory()], "Settings 既定値")
 s.largeFileThresholdMB = 1234
 s.lastScheduledRun = Date(timeIntervalSince1970: 1_700_000_000)
 s.largeFileRoots = ["/tmp/x"]
 try! s.save()
 check(Settings.load() == s, "Settings の保存→読込が一致")
-try! "{\"scanIntervalDays\": 3}".write(to: Storage.settingsURL, atomically: true, encoding: .utf8)
-check(Settings.load().scanIntervalDays == 3 && Settings.load().largeFileThresholdMB == 500, "Settings 欠損キーは既定値で補う")
+try! "{\"fullScanHour\": 3}".write(to: Storage.settingsURL, atomically: true, encoding: .utf8)
+check(Settings.load().fullScanHour == 3 && Settings.load().largeFileThresholdMB == 500, "Settings 欠損キーは既定値で補う")
 try! "broken".write(to: Storage.settingsURL, atomically: true, encoding: .utf8)
 check(Settings.load() == Settings(), "Settings 破損時は既定値")
 
@@ -367,22 +367,40 @@ check(Leftovers.looksLikeBundleID("com.foo.bar") && !Leftovers.looksLikeBundleID
 // --- P5: スケジューラ / スマートケア / 設定 ---
 check(Storage.baseDir.path.contains("/MacCareTests/") && !Storage.baseDir.path.hasSuffix("Application Support/MacCare"), "テストは注入した保存先のみ使う(実 AppSupport を使わない)")
 var sch = Settings()
-let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-sch.scheduledScanEnabled = true; sch.scanIntervalDays = 7; sch.lastScheduledRun = nil
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .run, "スケジューラ: 未実行なら実行(起動時の遅延実行を含む)")
-sch.lastScheduledRun = t0.addingTimeInterval(-6 * 86400)
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .notDue, "スケジューラ: 間隔未満は実行しない")
-sch.lastScheduledRun = t0.addingTimeInterval(-7 * 86400)
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .run, "スケジューラ: ちょうど間隔で実行")
-sch.lastScheduledRun = t0.addingTimeInterval(-30 * 86400)
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .run, "スケジューラ: 期限超過(キャッチアップ)は実行")
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: true, busy: false) == .skipBattery, "スケジューラ: 低バッテリーはスキップ")
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: true) == .skipBusy, "スケジューラ: スキャン中はスキップ")
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: true, busy: true) == .skipBusy, "スケジューラ: 実行中判定が優先")
+sch.scheduledScanEnabled = true; sch.fullScanHour = 0; sch.fullScanMinute = 0; sch.lastScheduledRun = nil
+var jcal = Calendar(identifier: .gregorian); jcal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+func jd(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date { jcal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))! }
+func dec(_ now: Date, last: Date?, low: Bool = false, busy: Bool = false, _ s: Settings = sch, _ cal: Calendar = jcal) -> ScheduleDecision {
+    SchedulerLogic.decide(settings: s, now: now, lastFull: last, batteryLow: low, busy: busy, calendar: cal)
+}
+let noon = jd(2026, 10, 15, 12, 0)
+check(dec(noon, last: nil) == .run, "スケジューラ: 未実行なら実行")
+check(dec(noon, last: jd(2026, 10, 15, 0, 3)) == .notDue, "スケジューラ: 今日0:03に実行済みなら実行しない(1日1回)")
+check(dec(jd(2026, 10, 15, 23, 59), last: jd(2026, 10, 15, 0, 3)) == .notDue, "スケジューラ: 同じ日の23:59も実行しない")
+check(dec(jd(2026, 10, 15, 0, 0), last: jd(2026, 10, 14, 0, 3)) == .run, "スケジューラ: 日付が変わった0:00ちょうどで実行")
+check(dec(jd(2026, 10, 14, 23, 59), last: jd(2026, 10, 14, 0, 3)) == .notDue, "スケジューラ: 0:00の前は実行しない")
+check(dec(noon, last: jd(2026, 10, 12, 0, 3)) == .run, "スケジューラ: 数日取り逃した場合は復帰後に実行(補完)")
+check(dec(noon, last: jd(2026, 10, 14, 23, 50)) == .run, "スケジューラ: 前日23:50の手動フルは当日0:00分を満たさない")
+check(dec(noon, last: nil, low: true) == .skipBattery, "スケジューラ: 低バッテリーはスキップ")
+check(dec(noon, last: nil, busy: true) == .skipBusy, "スケジューラ: スキャン中はスキップ")
+check(dec(noon, last: nil, low: true, busy: true) == .skipBusy, "スケジューラ: 実行中判定が優先")
+var shs = sch; shs.lastScheduledRun = jd(2026, 10, 15, 0, 5)
+check(dec(noon, last: nil, shs) == .notDue, "スケジューラ: lastScheduledRun も実行済みとみなす")
+var sch3 = sch; sch3.fullScanHour = 3; sch3.fullScanMinute = 30
+check(dec(jd(2026, 10, 15, 3, 29), last: jd(2026, 10, 14, 3, 31), sch3) == .notDue && dec(jd(2026, 10, 15, 3, 30), last: jd(2026, 10, 14, 3, 31), sch3) == .run, "スケジューラ: 実行時刻を変更できる(3:30)")
 sch.scheduledScanEnabled = false
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .disabled, "スケジューラ: 無効設定では実行しない")
-sch.scheduledScanEnabled = true; sch.scanIntervalDays = 1; sch.lastScheduledRun = t0.addingTimeInterval(-86400 - 1)
-check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .run, "スケジューラ: 間隔1日")
+check(dec(noon, last: nil) == .disabled, "スケジューラ: 無効設定では実行しない")
+sch.scheduledScanEnabled = true
+// 夏時間（米国 2026-03-08 に 2:00→3:00）でも予定時刻が正しく求まる
+var ny = Calendar(identifier: .gregorian); ny.timeZone = TimeZone(identifier: "America/New_York")!
+var sch2 = sch; sch2.fullScanHour = 2; sch2.fullScanMinute = 30
+let nyNow = ny.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 12))!
+let tgt = SchedulerLogic.lastTarget(now: nyNow, hour: 2, minute: 30, calendar: ny)
+check(tgt < nyNow && nyNow.timeIntervalSince(tgt) < 86400 && tgt > nyNow.addingTimeInterval(-2 * 86400), "夏時間: 存在しない2:30でも直近の予定時刻を返す")
+check(SchedulerLogic.decide(settings: sch2, now: nyNow, lastFull: tgt, batteryLow: false, busy: false, calendar: ny) == .notDue, "夏時間: 予定時刻に実行済みなら再実行しない")
+check(SchedulerLogic.catchUpDelay(now: jd(2026, 10, 14, 23, 58), hour: 0, minute: 0, calendar: jcal) == 30
+      && SchedulerLogic.catchUpDelay(now: jd(2026, 10, 15, 0, 3), hour: 0, minute: 0, calendar: jcal) == 30
+      && SchedulerLogic.catchUpDelay(now: jd(2026, 10, 15, 9, 0), hour: 0, minute: 0, calendar: jcal) == 300, "復帰後の待ち時間: 予定時刻付近は30秒、通常は5分")
 
 func cat(_ id: String, _ items: [String]) -> CleanupCategory {
     CleanupCategory(id: id, name: id, summary: "", effect: "", roots: [], items: items.map { CleanupItem(url: URL(fileURLWithPath: "/x/\($0)"), size: 10) }, skipped: 0)
@@ -394,7 +412,7 @@ check(!safeIDs.contains { $0.contains("node_modules") || $0.contains("xcode") ||
 check(!SmartCare.safeCategoryIDs.contains("node_modules") && !SmartCare.safeCategoryIDs.contains("trash"), "スマートケア: 安全リストに危険分類なし")
 
 var ns = Settings()
-ns.deepScan = true; ns.launchAtLoginInitialized = true; ns.scanIntervalDays = 3; ns.scanTargets = ["/a", "/b"]
+ns.deepScan = true; ns.launchAtLoginInitialized = true; ns.fullScanHour = 3; ns.wakeForScan = true; ns.wakeScheduleTime = "02:58:00"; ns.scanTargets = ["/a", "/b"]
 try! ns.save()
 check(Settings.load() == ns && Settings.load().deepScan == true, "Settings: 新規項目(deepScan/起動登録済み)の保存→読込")
 var disk = Settings(); disk.ignoredDetections = [IgnoredDetection(path: "/p", sha256: "h")]
@@ -519,7 +537,7 @@ let scRes = runMain { () -> SmartCareResult? in
             let r: (junk: Int64, safeJunk: Int64) = (100, 40)
             s.cleanup.categories = []          // ステップ後に共有状態が変わる（別の掃除など）
             return r },
-        security: { _ in 2 }, loginItems: { _ in (1, 0) }, largeFiles: { _, _ in (3, 9) })
+        security: { _, _ in 2 }, loginItems: { _ in (1, 0) }, largeFiles: { _, _ in (3, 9) })
     await st.smartCare.run(state: st)
     return st.smartCare.result
 }
@@ -699,6 +717,7 @@ func metricsTests() {
 }
 healthTests()
 metricsTests()
+scanUpdateTests()
 
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")

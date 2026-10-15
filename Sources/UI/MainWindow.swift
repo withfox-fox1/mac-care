@@ -69,6 +69,12 @@ struct MainWindow: View {
             HStack(spacing: 0) {
                 sidebar
                 detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .top) {
+                        if let n = state.update.notice {
+                            NoticeBanner(text: n.text, isError: n.isError) { state.update.notice = nil }
+                                .padding(.horizontal, 30).padding(.top, 12)
+                        }
+                    }
             }
         }
         .oceanScheme()
@@ -111,6 +117,11 @@ struct MainWindow: View {
                 Text(item.title).font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(on ? Color.white : Color(hex: "cfe6ec"))
                 Spacer(minLength: 0)
+                if item == .settings, state.update.availableCount > 0 {
+                    Text("\(state.update.availableCount)").font(.system(size: 10.5, weight: .heavy)).foregroundStyle(Color(hex: "1b1200"))
+                        .padding(.horizontal, 7).padding(.vertical, 2).background(Theme.warn, in: Capsule())
+                        .accessibilityLabel("アップデートあり")
+                }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
             .background(on ? Theme.accentText.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -197,6 +208,93 @@ struct SettingsView: View {
     @Environment(AppState.self) private var state
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
     @State private var launchError: String? = nil
+    @State private var wakeBusy = false
+    @State private var wakeError: String? = nil
+
+    private var fullScanTime: Binding<Date> {
+        Binding(get: { Calendar.current.date(from: DateComponents(hour: state.settings.fullScanHour, minute: state.settings.fullScanMinute)) ?? Date() },
+                set: { d in
+                    let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+                    state.settings.fullScanHour = c.hour ?? 0; state.settings.fullScanMinute = c.minute ?? 0
+                })
+    }
+
+    /// pmset の起床スケジュールを設定/解除する（明示操作時のみ。管理者パスワードのプロンプトが出る）
+    private func setWake(_ on: Bool) async {
+        wakeBusy = true; defer { wakeBusy = false }
+        wakeError = nil
+        var s = Settings.load()
+        let events = await WakeScheduler.currentEvents()
+        let existing = WakeSchedule.classify(events, ourTime: s.wakeScheduleTime)
+        if on {
+            if case .foreign(let ev) = existing {
+                let a = NSAlert()
+                a.messageText = "既存の起床スケジュールを上書きしますか？"
+                a.informativeText = "pmset の繰り返しスケジュールは 1 つしか持てません。現在の設定（\(ev.map { "\($0.kind) \($0.time) \($0.days)" }.joined(separator: ", "))）は上書きされます。"
+                a.addButton(withTitle: "上書きする"); a.addButton(withTitle: "キャンセル")
+                guard a.runModal() == .alertFirstButtonReturn else { return }
+            }
+            s.fullScanHour = state.settings.fullScanHour; s.fullScanMinute = state.settings.fullScanMinute
+            if let err = await WakeScheduler.run(arguments: WakeSchedule.applyArguments(hour: s.fullScanHour, minute: s.fullScanMinute)) {
+                wakeError = "起床スケジュールを設定できませんでした: \(err)"; return
+            }
+            s.wakeForScan = true
+            s.wakeScheduleTime = WakeSchedule.wakeTime(hour: s.fullScanHour, minute: s.fullScanMinute)
+        } else {
+            // MacCare 以外の繰り返しスケジュールは解除しない
+            if case .foreign = existing {
+                wakeError = "MacCare 以外の起床スケジュールがあるため、pmset は変更せず MacCare 側の設定のみ解除しました。"
+            } else if let err = await WakeScheduler.run(arguments: WakeSchedule.cancelArguments) {
+                wakeError = "起床スケジュールを解除できませんでした: \(err)"; return
+            }
+            s.wakeForScan = false; s.wakeScheduleTime = nil
+        }
+        s.wakeSuggestionDismissed = true
+        try? s.save()
+        state.settings.wakeForScan = s.wakeForScan
+        state.settings.wakeScheduleTime = s.wakeScheduleTime
+        state.settings.wakeSuggestionDismissed = true
+    }
+
+    private var updateCard: some View {
+        let u = state.update
+        return card("アップデート") {
+            labeled("現在のバージョン", BuildInfo.display)
+            labeled("最終確認", u.lastCheck.map { ShortDate.format($0) } ?? "未確認")
+            HStack(spacing: 10) {
+                Button("アップデートを確認") { Task { await u.check() } }.buttonStyle(.secondary).disabled(u.checking)
+                if u.checking { ProgressView().controlSize(.small); Text("確認中…").font(.caption).foregroundStyle(Theme.secondary) }
+                Spacer()
+                if case .available = u.state {
+                    Button("アップデートする") { u.confirmAndStart() }.buttonStyle(.primary)
+                }
+            }
+            switch u.state {
+            case .unknown: EmptyView()
+            case .upToDate:
+                StatusBadge(kind: .ok, "最新です")
+            case .available(let n, let commits):
+                StatusBadge(kind: .warn, "更新あり（\(n) 件）")
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(commits, id: \.hash) { c in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(c.hash).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.accentText)
+                            Text(c.subject).font(.system(size: 12)).lineLimit(2)
+                        }
+                    }
+                    if n > commits.count { Text("ほか \(n - commits.count) 件").font(.caption).foregroundStyle(Theme.secondary) }
+                }
+            case .blocked(let m):
+                StatusBadge(kind: .warn, "更新できません")
+                Text(m).font(.caption).foregroundStyle(Theme.warn)
+            case .unavailable(let m):
+                StatusBadge(kind: .info, "確認できません")
+                Text(m).font(.caption).foregroundStyle(Theme.secondary)
+            }
+            Text("更新は GitHub の origin/main を取り込み、アプリを再ビルドして再起動します。1 日 1 回、自動で確認だけ行います（自動インストールはしません）。ログ: \(SelfUpdate.logURL.path)")
+                .font(.caption).foregroundStyle(Theme.secondary)
+        }
+    }
 
     private func pickFolder(_ add: @escaping (String) -> Void) {
         let p = NSOpenPanel()
@@ -242,6 +340,7 @@ struct SettingsView: View {
         PaneScaffold(item: .settings, subtitle: "変更は自動で保存されます。", framed: false) { EmptyView() } content: {
             ScrollView {
                 VStack(spacing: 14) {
+                    updateCard
                     card("外部ツール") {
                         ForEach(state.tools) { t in
                             HStack {
@@ -260,9 +359,26 @@ struct SettingsView: View {
                             launchAtLogin = LaunchAtLogin.isEnabled
                         }))
                         if let e = launchError { Text(e).font(.caption).foregroundStyle(Theme.warn) }
-                        Toggle("定期スキャンを有効にする", isOn: $st.settings.scheduledScanEnabled)
-                        Stepper("スキャン間隔: \(st.settings.scanIntervalDays) 日", value: $st.settings.scanIntervalDays, in: 1...60)
+                    }
+                    card("フルスキャン（定期実行）") {
+                        Toggle("毎日フルスキャンを実行する（スマートケアを含む全ファイル・両エンジン）", isOn: $st.settings.scheduledScanEnabled)
+                        DatePicker("実行時刻", selection: fullScanTime, displayedComponents: .hourAndMinute)
+                        Text("フルスキャン: 毎日 \(String(format: "%d:%02d", st.settings.fullScanHour, st.settings.fullScanMinute))。Mac がスリープ中・停止中で逃した場合は、起動・復帰の数分後に実行します（1 日 1 回）。")
+                            .font(.caption).foregroundStyle(Theme.secondary)
+                        labeled("前回のフルスキャン", state.security.lastFullAt.map { ShortDate.format($0) } ?? "未実施")
                         labeled("前回の定期実行", st.settings.lastScheduledRun?.formatted(date: .abbreviated, time: .shortened) ?? "なし")
+                        Toggle("スリープ中でも起こしてスキャン", isOn: Binding(get: { state.settings.wakeForScan }, set: { on in Task { await setWake(on) } }))
+                            .disabled(wakeBusy)
+                        if state.settings.wakeForScan, let t = state.settings.wakeScheduleTime, t != WakeSchedule.wakeTime(hour: st.settings.fullScanHour, minute: st.settings.fullScanMinute) {
+                            HStack {
+                                Text("起床時刻（\(t)）が実行時刻とずれています").font(.caption).foregroundStyle(Theme.warn)
+                                Spacer()
+                                Button("起床時刻を再設定") { Task { await setWake(true) } }.buttonStyle(.secondary).disabled(wakeBusy)
+                            }
+                        }
+                        if let e = wakeError { Text(e).font(.caption).foregroundStyle(Theme.warn) }
+                        Text("実行時刻の \(WakeSchedule.leadMinutes) 分前に Mac を起こします（pmset の繰り返しスケジュール。設定時に管理者パスワードが必要です）。スキャン中はスリープしないよう保持しますが、バッテリー駆動で蓋を閉じている場合は macOS が眠ることがあり、その場合は次の復帰後に実行します。")
+                            .font(.caption).foregroundStyle(Theme.secondary)
                     }
                     card("クリーンアップ・大容量ファイル") {
                         Stepper("大容量ファイルの閾値: \(st.settings.largeFileThresholdMB) MB", value: $st.settings.largeFileThresholdMB, in: 50...50_000, step: 50)

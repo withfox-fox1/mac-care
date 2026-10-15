@@ -23,8 +23,18 @@ struct Settings: Codable, Equatable {
     var largeFileRoots: [String] = [NSHomeDirectory()]
     var nodeModulesStaleDays: Int = 90
     var scheduledScanEnabled: Bool = true
-    var scanIntervalDays: Int = 7
     var lastScheduledRun: Date? = nil
+    /// フルスキャンの実行時刻（毎日）。既定 0:00
+    var fullScanHour: Int = 0
+    var fullScanMinute: Int = 0
+    /// セキュリティスキャンの方式: true=クイック（変更分のみ）、false=フル
+    var quickScan: Bool = true
+    /// フルスキャン前にスリープから復帰させる pmset スケジュールを設定済みか
+    var wakeForScan: Bool = false
+    /// 設定済みの起床時刻（"HH:MM:SS"）。解除・uninstall 判定用
+    var wakeScheduleTime: String? = nil
+    /// 起床スケジュールの提案（おすすめ）を閉じたか
+    var wakeSuggestionDismissed: Bool = false
     var scanTargets: [String] = {
         let h = NSHomeDirectory()
         return [h + "/Downloads", h + "/Desktop", h + "/Documents", "/Applications"]
@@ -43,7 +53,9 @@ struct Settings: Codable, Equatable {
         largeFileRoots = o.largeFileRoots
         nodeModulesStaleDays = o.nodeModulesStaleDays
         scheduledScanEnabled = o.scheduledScanEnabled
-        scanIntervalDays = o.scanIntervalDays
+        fullScanHour = o.fullScanHour
+        fullScanMinute = o.fullScanMinute
+        quickScan = o.quickScan
         scanTargets = o.scanTargets
         deepScan = o.deepScan
     }
@@ -56,7 +68,12 @@ struct Settings: Codable, Equatable {
         largeFileRoots = try c.decodeIfPresent([String].self, forKey: .largeFileRoots) ?? d.largeFileRoots
         nodeModulesStaleDays = try c.decodeIfPresent(Int.self, forKey: .nodeModulesStaleDays) ?? d.nodeModulesStaleDays
         scheduledScanEnabled = try c.decodeIfPresent(Bool.self, forKey: .scheduledScanEnabled) ?? d.scheduledScanEnabled
-        scanIntervalDays = try c.decodeIfPresent(Int.self, forKey: .scanIntervalDays) ?? d.scanIntervalDays
+        fullScanHour = try c.decodeIfPresent(Int.self, forKey: .fullScanHour) ?? d.fullScanHour
+        fullScanMinute = try c.decodeIfPresent(Int.self, forKey: .fullScanMinute) ?? d.fullScanMinute
+        quickScan = try c.decodeIfPresent(Bool.self, forKey: .quickScan) ?? d.quickScan
+        wakeForScan = try c.decodeIfPresent(Bool.self, forKey: .wakeForScan) ?? d.wakeForScan
+        wakeScheduleTime = try c.decodeIfPresent(String.self, forKey: .wakeScheduleTime)
+        wakeSuggestionDismissed = try c.decodeIfPresent(Bool.self, forKey: .wakeSuggestionDismissed) ?? d.wakeSuggestionDismissed
         lastScheduledRun = try c.decodeIfPresent(Date.self, forKey: .lastScheduledRun)
         scanTargets = try c.decodeIfPresent([String].self, forKey: .scanTargets) ?? d.scanTargets
         ignoredDetections = try c.decodeIfPresent([IgnoredDetection].self, forKey: .ignoredDetections) ?? d.ignoredDetections

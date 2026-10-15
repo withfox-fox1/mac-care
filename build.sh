@@ -16,6 +16,11 @@ swiftc -O -swift-version 5 $(find Sources -name '*.swift') \
   -o "$APP/Contents/MacOS/MacCare"
 
 cp Info.plist "$APP/Contents/Info.plist"
+# 自己アップデート用: ソースの場所とビルド時のコミットを埋め込む
+PB=/usr/libexec/PlistBuddy
+"$PB" -c "Add :MCSourceDir string $PWD" "$APP/Contents/Info.plist"
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || true)
+[[ -n "$COMMIT" ]] && "$PB" -c "Add :MCBuildCommit string $COMMIT" "$APP/Contents/Info.plist"
 # アプリアイコンとメニューバー用アイコンを同梱
 mkdir -p "$APP/Contents/Resources"
 cp Resources/AppIcon.icns Resources/MenuBarIcon*.png "$APP/Contents/Resources/"

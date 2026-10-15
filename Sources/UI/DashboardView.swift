@@ -52,10 +52,9 @@ struct DashboardView: View {
             Spacer(minLength: 12)
             VStack(alignment: .trailing, spacing: 8) {
                 if m.running {
-                    HStack(spacing: 10) {
-                        ProgressView().controlSize(.small)
-                        Text("\(m.doneSteps.count + 1) / \(SmartCareStep.allCases.count)　\(m.statusText)")
-                            .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.secondary)
+                    HStack(alignment: .bottom, spacing: 12) {
+                        ScanProgressBlock(fraction: m.progress, etaText: m.etaText, stepText: m.statusText,
+                                          detailText: m.activeSteps.contains(.security) ? state.security.detail : "", width: 250)
                         Button("中止") { m.cancel(state: state) }.buttonStyle(.secondary)
                     }
                 } else {
@@ -64,6 +63,7 @@ struct DashboardView: View {
                     }.buttonStyle(.primary)
                 }
                 Text(meta(m)).font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                Text(FullScanLabel.text(state.security.lastFullAt)).font(.system(size: 11)).foregroundStyle(Theme.secondary.opacity(0.85))
             }
         }
     }
@@ -93,7 +93,7 @@ struct DashboardView: View {
         private func stepState(_ s: SmartCareStep, _ m: SmartCareModel) -> CardStepState? {
         guard m.running else { return nil }
         if m.doneSteps.contains(s) { return .done }
-        return m.currentStep == s ? .checking : .waiting
+        return m.activeSteps.contains(s) ? .checking : .waiting
     }
 
     private func cards(_ m: SmartCareModel) -> some View {
@@ -113,6 +113,7 @@ struct DashboardView: View {
                 }
             }
             StatusCard(title: "脅威", symbol: "checkmark.shield.fill", color: Theme.security, step: stepState(.security, m),
+                       stepDetail: m.running ? state.security.detail : nil,
                        value: r.map { "\($0.threats) 件" },
                        detail: r == nil ? nil : "XProtect \(state.security.status?.xprotectVersion ?? "—")・YARA・ClamAV",
                        badge: r == nil ? (.info, "未実行") : r!.threats == 0 ? (.ok, "保護中") : (.danger, "要対応"),
@@ -222,6 +223,8 @@ struct RecommendationRow: View {
         case .threats: [Color(hex: "ef4444"), Color(hex: "dc2626")]
         case .junk: [Color(hex: "0ea5e9"), Color(hex: "3b82f6")]
         case .staleScan: [Color(hex: "14b8a6"), Color(hex: "3b82f6")]
+        case .appUpdate: [Color(hex: "3b82f6"), Color(hex: "6366f1")]
+        case .wakeSchedule: [Color(hex: "6366f1"), Color(hex: "8b5cf6")]
         case .notifications, .fullDiskAccess: [Color(hex: "10b981"), Color(hex: "14b8a6")]
         }
     }
@@ -252,6 +255,7 @@ struct StatusCard<Extra: View>: View {
     let symbol: String
     let color: Color
     let step: CardStepState?
+    var stepDetail: String? = nil
     let value: String?
     let detail: String?
     let badge: (BadgeKind, String)
@@ -272,7 +276,7 @@ struct StatusCard<Extra: View>: View {
                             .font(.system(size: 20, weight: .heavy))
                             .foregroundStyle(step == .done ? Theme.ok : step == .checking ? Theme.text : Theme.secondary)
                     }.padding(.top, 10)
-                    Text(" ").font(.system(size: 11.5)).padding(.top, 4)
+                    Text(step == .checking ? (stepDetail ?? " ") : " ").font(.system(size: 11.5)).foregroundStyle(Theme.secondary).lineLimit(1).padding(.top, 4)
                     Color.clear.frame(height: 22).padding(.top, 10)
                 } else {
                     Text(value ?? "—").font(.system(size: 26, weight: .heavy)).lineLimit(1).minimumScaleFactor(0.7).padding(.top, 10)
