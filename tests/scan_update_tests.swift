@@ -177,4 +177,21 @@ func scanUpdateTests() {
     check(MachineInfo.shortProductName("MacBook Air (13-inch, M5)") == "MacBook Air", "機種名: 括弧内を除く")
     check(MachineInfo.shortProductName("Mac mini") == "Mac mini", "機種名: 括弧なしはそのまま")
     check(MachineInfo.shortProductName(" (M5)") == "", "機種名: 括弧だけなら空")
+    // 動画キューの集計
+    do {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        typealias I = QueueSummary.Item
+        // 完了1本（600秒の動画を300秒で処理＝2倍速）、実行中1本（1200秒の半分）、待機1本（600秒）
+        let items = [I(state: .done, duration: 600, progress: 1, startedAt: t0, finishedAt: t0.addingTimeInterval(300)),
+                     I(state: .running, duration: 1200, progress: 0.5, startedAt: t0.addingTimeInterval(300), finishedAt: nil),
+                     I(state: .waiting, duration: 600, progress: 0, startedAt: nil, finishedAt: nil),
+                     I(state: .other, duration: 100, progress: 0, startedAt: nil, finishedAt: nil)]
+        let s = QueueSummary.make(jobs: items, now: t0.addingTimeInterval(600))
+        check(s.total == 3 && s.done == 1 && s.failedOrSkipped == 1, "動画キュー: 本数の集計")
+        check(abs((s.fraction ?? 0) - 0.5) < 1e-9, "動画キュー: 再生時間ベースの全体進捗")
+        // 実績 (600+600)/(300+300)=2倍速、残り再生 600+600=1200秒 → 600秒
+        check(abs((s.remaining ?? 0) - 600) < 1e-6, "動画キュー: 残り時間")
+        let unknown = QueueSummary.make(jobs: [I(state: .waiting, duration: nil, progress: 0, startedAt: nil, finishedAt: nil)], now: t0)
+        check(unknown.fraction == nil && unknown.remaining == nil, "動画キュー: 再生時間が未取得なら計算中")
+    }
 }

@@ -25,9 +25,14 @@ enum CompressOutcome: Equatable {
 final class JobControl: @unchecked Sendable {
     private let lock = NSLock()
     private var pid: Int32 = 0
+    private var output: URL?
     func setPID(_ p: Int32) { lock.lock(); pid = p; lock.unlock() }
+    func setOutput(_ u: URL?) { lock.lock(); output = u; lock.unlock() }
+    var currentOutput: URL? { lock.lock(); defer { lock.unlock() }; return output }
     func pause() { lock.lock(); if pid > 0 { kill(pid, SIGSTOP) }; lock.unlock() }
     func resume() { lock.lock(); if pid > 0 { kill(pid, SIGCONT) }; lock.unlock() }
+    /// アプリ終了時用: ffmpeg を即時停止する（SIGTERM だと faststart の書き戻しで終了が遅れるため SIGKILL）
+    func killNow() { lock.lock(); if pid > 0 { kill(pid, SIGCONT); kill(pid, SIGKILL) }; lock.unlock() }
 }
 
 enum VideoCompressor {
@@ -103,6 +108,8 @@ enum VideoCompressor {
                     "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
                     "-progress", "pipe:1", "-nostats", out.path]
         let res: ShellResult
+        control.setOutput(out)
+        defer { control.setOutput(nil) }
         do {
             res = try await Shell.run(ffmpeg, args, onLine: { line in
                 if dur > 0, line.hasPrefix("out_time_us="), let us = Double(line.dropFirst(12)) {
@@ -157,6 +164,8 @@ final class CompressQueue {
         var progress: Double = 0
         var startedAt: Date? = nil
         var eta: TimeInterval? = nil
+        var duration: Double? = nil      // 再生時間（全体の残り時間の見積もりに使う）
+        var finishedAt: Date? = nil
     }
 
     var jobs: [Job] = []
@@ -177,7 +186,45 @@ final class CompressQueue {
             if jobs.contains(where: { $0.url == u && ($0.status == .waiting || $0.status == .running) }) { continue }
             jobs.append(Job(url: u)); n += 1
         }
+        if n > 0 { loadDurations() }
         return n
+    }
+
+    /// 再生時間を後から読み込む（ffprobe）
+    private func loadDurations() {
+        guard let ffprobe = Tools.path("ffprobe") else { return }
+        let targets = jobs.filter { $0.duration == nil }.map { ($0.id, $0.url) }
+        Task { [weak self] in
+            for (id, url) in targets {
+                let d = (try? await VideoCompressor.probe(url, ffprobe: ffprobe))?.duration
+                guard let self, let i = self.jobs.firstIndex(where: { $0.id == id }) else { continue }
+                self.jobs[i].duration = d
+            }
+        }
+    }
+
+    /// キュー全体の集計（完了本数・全体の進捗・残り時間）
+    var summary: QueueSummary {
+        QueueSummary.make(jobs: jobs.map {
+            QueueSummary.Item(state: {
+                switch $0.status {
+                case .waiting: return .waiting
+                case .running, .paused: return .running
+                case .done: return .done
+                default: return .other
+                }
+            }($0), duration: $0.duration, progress: $0.progress, startedAt: $0.startedAt, finishedAt: $0.finishedAt)
+        }, now: Date())
+    }
+
+    /// アプリ終了時: 実行中の ffmpeg を止め、作りかけの出力をゴミ箱へ移す（元ファイルは残る）
+    func terminateForQuit() {
+        stopRequested = true
+        let out = control.currentOutput
+        control.killNow()
+        if let out, FileManager.default.fileExists(atPath: out.path) {
+            try? SafeTrash.trash(out, allowedRoots: [out.deletingLastPathComponent()])
+        }
     }
 
     func start() {
@@ -220,6 +267,7 @@ final class CompressQueue {
         case .cancelled: jobs[i].status = .cancelled
         }
         jobs[i].eta = nil
+        jobs[i].finishedAt = Date()
     }
 
     private func updateProgress(_ id: UUID, _ p: Double) {
@@ -248,5 +296,58 @@ final class CompressQueue {
 
     func clearFinished() {
         jobs.removeAll { if case .waiting = $0.status { return false }; return $0.status != .running && $0.status != .paused }
+    }
+}
+
+/// 圧縮キュー全体の集計（純粋関数。テスト対象）
+struct QueueSummary: Equatable {
+    enum State { case waiting, running, done, other }
+    struct Item {
+        var state: State
+        var duration: Double?
+        var progress: Double
+        var startedAt: Date?
+        var finishedAt: Date?
+    }
+
+    var total = 0            // 完了＋実行中＋待機中
+    var done = 0
+    var failedOrSkipped = 0
+    var fraction: Double? = nil      // 再生時間ベースの全体進捗（0...1）。再生時間が未取得なら nil
+    var remaining: TimeInterval? = nil
+    var finishAt: Date? = nil
+
+    static func make(jobs: [Item], now: Date) -> QueueSummary {
+        var s = QueueSummary()
+        let active = jobs.filter { $0.state != .other }
+        s.total = active.count
+        s.done = active.filter { $0.state == .done }.count
+        s.failedOrSkipped = jobs.count - active.count
+        guard !active.isEmpty, active.allSatisfy({ ($0.duration ?? 0) > 0 }) else { return s }
+
+        let totalMedia = active.reduce(0) { $0 + ($1.duration ?? 0) }
+        var doneMedia = 0.0, remainingMedia = 0.0
+        var measuredMedia = 0.0, measuredWall = 0.0   // 実績（再生秒 / 経過秒）
+        for j in active {
+            let d = j.duration ?? 0
+            switch j.state {
+            case .done:
+                doneMedia += d
+                if let a = j.startedAt, let b = j.finishedAt, b > a { measuredMedia += d; measuredWall += b.timeIntervalSince(a) }
+            case .running:
+                doneMedia += d * j.progress
+                remainingMedia += d * (1 - j.progress)
+                if let a = j.startedAt, j.progress > 0.02 { measuredMedia += d * j.progress; measuredWall += now.timeIntervalSince(a) }
+            case .waiting: remainingMedia += d
+            case .other: break
+            }
+        }
+        s.fraction = totalMedia > 0 ? min(1, doneMedia / totalMedia) : nil
+        if measuredWall > 30, measuredMedia > 0 {
+            let speed = measuredMedia / measuredWall          // 再生何秒ぶんを1秒で処理できるか
+            s.remaining = remainingMedia / speed
+            s.finishAt = now.addingTimeInterval(s.remaining!)
+        }
+        return s
     }
 }

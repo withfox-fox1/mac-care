@@ -4,6 +4,8 @@ import AppKit
 /// 起動済みアプリの再クリック（Finder / Launchpad / open -a）でウィンドウを開く
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
+        // 動画圧縮: ffmpeg を即時停止し、作りかけの出力を片付ける（元ファイルは残る）
+        MainActor.assumeIsolated { AppState.shared.compressQueue.terminateForQuit() }
         ChildRegistry.terminateAll()   // 一時停止中のものを含め ffmpeg 等の子プロセスを止める
     }
 

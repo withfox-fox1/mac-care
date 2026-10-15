@@ -57,3 +57,8 @@
 ### 注意事項
 - ターミナルにフルディスクアクセスがなく `~/.Trash` は未調査。
 - 削除対象外：`~/Library/Application Support/Claude/vm_bundles`（10GB）、`~/voicevox_engine`。
+
+## 2026-10-15 夕方
+- ナレッジ動画の圧縮（`--compress-list`、リストは `~/Library/Application Support/MacCare/knowledge_compress_list.txt`）を 17:22 開始、18:19 に移動のため中断。7/20 本完了。
+  - 中断中だった「コンセプトとブランディング…」は元の .mov を残し、作りかけの .mp4 はゴミ箱へ移動済み。再開は同じリストで `open -a MacCare --args --compress-list <リスト>`（完了済みは元ファイルが無いので自動で除外される）。
+- 不具合：MacCare を AppleScript の quit で終了しても ffmpeg の子プロセスが残った（手動で kill）。終了時の子プロセス停止を要修正。
