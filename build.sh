@@ -11,7 +11,7 @@ mkdir -p "$APP/Contents/MacOS"
 
 # Sources 配下の全 Swift ファイルをコンパイル
 swiftc -O -swift-version 5 $(find Sources -name '*.swift') \
-  -framework SwiftUI -framework AppKit \
+  -framework SwiftUI -framework AppKit -framework IOKit -framework ServiceManagement \
   -target "$(uname -m)-apple-macos14.0" \
   -o "$APP/Contents/MacOS/MacCare"
 

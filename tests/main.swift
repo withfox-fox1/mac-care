@@ -360,6 +360,55 @@ let lo = Leftovers.find(library: lib2, installedIDs: ["com.example.bar"], runnin
 check(lo == ["com.gone.app", "com.gone.app2", "com.gone.pref.plist"], "残骸: 未インストールのID形式のみ(インストール済/実行中/Apple/非ID形式は除外)")
 check(Leftovers.looksLikeBundleID("com.foo.bar") && !Leftovers.looksLikeBundleID("com.foo") && !Leftovers.looksLikeBundleID("Google") && !Leftovers.looksLikeBundleID("a..b"), "Bundle ID 形式判定")
 
+
+// --- P5: スケジューラ / スマートケア / 設定 ---
+check(Storage.baseDir.path.contains("/MacCareTests/") && !Storage.baseDir.path.hasSuffix("Application Support/MacCare"), "テストは注入した保存先のみ使う(実 AppSupport を使わない)")
+var sch = Settings()
+let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+sch.scheduledScanEnabled = true; sch.scanIntervalDays = 7; sch.lastScheduledRun = nil
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .run, "スケジューラ: 未実行なら実行(起動時の遅延実行を含む)")
+sch.lastScheduledRun = t0.addingTimeInterval(-6 * 86400)
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .notDue, "スケジューラ: 間隔未満は実行しない")
+sch.lastScheduledRun = t0.addingTimeInterval(-7 * 86400)
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .run, "スケジューラ: ちょうど間隔で実行")
+sch.lastScheduledRun = t0.addingTimeInterval(-30 * 86400)
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .run, "スケジューラ: 期限超過(キャッチアップ)は実行")
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: true, busy: false) == .skipBattery, "スケジューラ: 低バッテリーはスキップ")
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: true) == .skipBusy, "スケジューラ: スキャン中はスキップ")
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: true, busy: true) == .skipBusy, "スケジューラ: 実行中判定が優先")
+sch.scheduledScanEnabled = false
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .disabled, "スケジューラ: 無効設定では実行しない")
+sch.scheduledScanEnabled = true; sch.scanIntervalDays = 1; sch.lastScheduledRun = t0.addingTimeInterval(-86400 - 1)
+check(SchedulerLogic.decide(settings: sch, now: t0, batteryLow: false, busy: false) == .run, "スケジューラ: 間隔1日")
+
+func cat(_ id: String, _ items: [String]) -> CleanupCategory {
+    CleanupCategory(id: id, name: id, summary: "", effect: "", roots: [], items: items.map { CleanupItem(url: URL(fileURLWithPath: "/x/\($0)"), size: 10) }, skipped: 0)
+}
+let allCats = ["caches", "logs", "npm", "brew", "pip", "xcode-derived", "xcode-archives", "xcode-devsupport", "node_modules"].map { cat($0, [$0 + "1"]) }
+let safeIDs = SmartCare.safeItemIDs(allCats)
+check(safeIDs == Set(["caches", "logs", "npm", "brew", "pip"].map { "/x/\($0)1" }), "スマートケア: 安全な分類のみ選択")
+check(!safeIDs.contains { $0.contains("node_modules") || $0.contains("xcode") || $0.contains("Trash") }, "スマートケア: node_modules/Xcode/ゴミ箱は含まれない")
+check(!SmartCare.safeCategoryIDs.contains("node_modules") && !SmartCare.safeCategoryIDs.contains("trash"), "スマートケア: 安全リストに危険分類なし")
+
+var ns = Settings()
+ns.deepScan = true; ns.launchAtLoginInitialized = true; ns.scanIntervalDays = 3; ns.scanTargets = ["/a", "/b"]
+try! ns.save()
+check(Settings.load() == ns && Settings.load().deepScan == true, "Settings: 新規項目(deepScan/起動登録済み)の保存→読込")
+var disk = Settings(); disk.ignoredDetections = [IgnoredDetection(path: "/p", sha256: "h")]
+var edited = Settings(); edited.largeFileThresholdMB = 777; edited.deepScan = true
+disk.mergeEditable(from: edited)
+check(disk.largeFileThresholdMB == 777 && disk.deepScan && disk.ignoredDetections.count == 1, "Settings: 編集項目のみマージ(無視リストは保持)")
+let sr = SmartCareResult(date: Date(timeIntervalSince1970: 1_700_000_000), junkBytes: 5, safeJunkBytes: 4, threats: 1, newLoginItems: 2,
+                         changedLoginItems: 0, largeFileCount: 3, largeFileBytes: 9, deep: false, seconds: 1.5)
+sr.save()
+check(SmartCareResult.load() == sr && sr.needsAttention, "スマートケア結果の保存→読込と警告判定")
+let dd = mk("deep/Apps", dir: true)
+var ts = Settings(); ts.scanTargets = [dd.path, "/Applications", home.path + "/nonexistent-dir"]
+let tq = SecurityScanner.buildTargets(settings: ts, loginItems: [])
+check(tq.yara.map(\.path) == [dd.path, "/Applications"] && tq.clam.map(\.path) == [dd.path], "セキュリティ対象: 標準では ClamAV から /Applications を除外(YARA は全対象)")
+ts.deepScan = true
+check(SecurityScanner.buildTargets(settings: ts, loginItems: []).clam.map(\.path) == [dd.path, "/Applications"], "セキュリティ対象: じっくりでは ClamAV も /Applications を含む")
+
 // --- Security E2E（ツールが無ければ SKIP） ---
 func runSecurityTests() async {
     guard let yara = Tools.path("yara"), let yarac = Tools.path("yarac") else { print("SKIP YARA テスト (yara/yarac なし)"); return await clamTests() }

@@ -13,14 +13,6 @@ struct LargeFilesView: View {
         let m = state.largeFiles
         PaneScaffold(title: "大容量ファイル", subtitle: "設定の閾値以上のファイルを検索します（~/Library・隠しフォルダは除外）。") {
             if m.scanning { ProgressView().controlSize(.small); Text("検索中…").foregroundStyle(.secondary) }
-            Button("Finderで表示") {
-                NSWorkspace.shared.activateFileViewerSelecting(selectedFiles.map(\.url))
-            }.disabled(selection.isEmpty)
-            Button("圧縮キューへ追加") {
-                let n = state.compressQueue.add(selectedFiles.filter(\.isVideo).map(\.url))
-                m.message = n > 0 ? "\(n) 件を圧縮キューに追加しました。" : "追加できる動画がありません。"
-            }.disabled(!selectedFiles.contains(where: \.isVideo))
-            Button("ゴミ箱へ") { confirmTrash = true }.disabled(selection.isEmpty)
             Button(m.hasScanned ? "再スキャン" : "スキャン") {
                 Task { await m.scan(settings: Settings.load()) }
             }.buttonStyle(.borderedProminent).disabled(m.scanning)
@@ -44,6 +36,20 @@ struct LargeFilesView: View {
                         TableColumn("種類", value: \.kind) { Text($0.kind) }.width(130)
                     }
                 }
+                Divider()
+                HStack {
+                    Text("選択中: \(selection.count) 件 / \(formatBytes(selectedFiles.reduce(0) { $0 + $1.size }))")
+                    Spacer()
+                    Button("Finderで表示") {
+                        NSWorkspace.shared.activateFileViewerSelecting(selectedFiles.map(\.url))
+                    }.disabled(selection.isEmpty)
+                    Button("圧縮キューへ追加") {
+                        let n = state.compressQueue.add(selectedFiles.filter(\.isVideo).map(\.url))
+                        m.message = n > 0 ? "\(n) 件を圧縮キューに追加しました。" : "追加できる動画がありません。"
+                    }.disabled(!selectedFiles.contains(where: \.isVideo))
+                    Button("ゴミ箱へ") { confirmTrash = true }.disabled(selection.isEmpty)
+                }
+                .padding()
             }
         }
         .task {

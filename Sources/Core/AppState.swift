@@ -15,6 +15,25 @@ final class AppState {
     let security = SecurityModel()
     let apps = AppsModel()
     let loginItems = LoginItemsModel()
+    let smartCare = SmartCareModel()
+    let scheduler = Scheduler()
+    /// 起動引数 --scan が未消費か（最初のセクション表示でのみ自動スキャンする）
+    var launchScanPending = CommandLine.arguments.contains("--scan")
+    private var backgroundStarted = false
+
+    /// メニューバーアイコンを警告表示にするか
+    var needsAttention: Bool { smartCare.result?.needsAttention ?? false }
+
+    /// 常駐用の処理を一度だけ開始（ログイン時起動の初期登録・定期スキャン）
+    func startBackgroundServices() {
+        guard !backgroundStarted else { return }
+        backgroundStarted = true
+        LaunchAtLogin.initializeIfNeeded()
+        scheduler.start(state: self)
+        if let r = smartCare.result {
+            lastScanSummary = "前回: \(r.date.formatted(date: .abbreviated, time: .shortened)) / \(r.summary)"
+        }
+    }
     /// `--scan` 指定時に、その項目表示で自動スキャンする対象（読み取り専用のスキャンのみ）
     var autoScanSection: String? = nil
 

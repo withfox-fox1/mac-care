@@ -24,11 +24,13 @@ struct SecurityView: View {
                         LabeledContent("SIP", value: s.sip)
                     } else { Text("取得中…").foregroundStyle(.secondary) }
                 }
+                Section { Text("現在のモード: \(state.settings.deepScan ? "じっくりスキャン" : "標準スキャン")（設定で変更できます）").font(.caption).foregroundStyle(.secondary) }
                 if let msg = m.message { Section { Text(msg).foregroundStyle(.orange) } }
                 if let r = m.lastReport {
                     Section("前回のスキャン") {
                         LabeledContent("結果", value: r.summary)
-                        LabeledContent("対象 / 所要時間 / 無視", value: "\(r.targetCount) 件 / \(Int(r.duration)) 秒 / \(r.hidden) 件")
+                        LabeledContent("モード", value: r.deep ? "じっくり（ClamAV も /Applications を対象）" : "標準（ClamAV は /Applications を除外）")
+                        LabeledContent("対象 / 所要時間 / 無視", value: "\(r.targetCount) 件 / \(Int(r.duration)) 秒（YARA \(Int(r.yaraSeconds)) 秒・ClamAV \(Int(r.clamSeconds)) 秒）/ \(r.hidden) 件")
                         ForEach(r.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
                     }
                     Section("検出結果") {
@@ -54,6 +56,7 @@ struct SecurityView: View {
             }
         }
         .task {
+            state.settings = Settings.load()
             await m.refreshStatus()
             if state.consumeAutoScan("security") { m.start(state: state) }
         }

@@ -30,8 +30,23 @@ struct Settings: Codable, Equatable {
         return [h + "/Downloads", h + "/Desktop", h + "/Documents", "/Applications"]
     }()
     var ignoredDetections: [IgnoredDetection] = []
+    /// じっくりスキャン: ClamAV の対象に /Applications を含める（既定は含めない）
+    var deepScan: Bool = false
+    /// ログイン時起動の初期登録を済ませたか
+    var launchAtLoginInitialized: Bool = false
 
     init() {}
+
+    /// 設定画面で編集する項目だけを取り込む（スキャン結果由来の項目は上書きしない）
+    mutating func mergeEditable(from o: Settings) {
+        largeFileThresholdMB = o.largeFileThresholdMB
+        largeFileRoots = o.largeFileRoots
+        nodeModulesStaleDays = o.nodeModulesStaleDays
+        scheduledScanEnabled = o.scheduledScanEnabled
+        scanIntervalDays = o.scanIntervalDays
+        scanTargets = o.scanTargets
+        deepScan = o.deepScan
+    }
 
     // 項目追加に備え、欠けているキーは既定値で補う
     init(from decoder: Decoder) throws {
@@ -45,6 +60,8 @@ struct Settings: Codable, Equatable {
         lastScheduledRun = try c.decodeIfPresent(Date.self, forKey: .lastScheduledRun)
         scanTargets = try c.decodeIfPresent([String].self, forKey: .scanTargets) ?? d.scanTargets
         ignoredDetections = try c.decodeIfPresent([IgnoredDetection].self, forKey: .ignoredDetections) ?? d.ignoredDetections
+        deepScan = try c.decodeIfPresent(Bool.self, forKey: .deepScan) ?? d.deepScan
+        launchAtLoginInitialized = try c.decodeIfPresent(Bool.self, forKey: .launchAtLoginInitialized) ?? d.launchAtLoginInitialized
     }
 
     static func load() -> Settings {

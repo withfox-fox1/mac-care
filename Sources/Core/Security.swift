@@ -165,6 +165,9 @@ struct ScanReport {
     var warnings: [String] = []
     var ranYara = false
     var ranClam = false
+    var deep = false
+    var yaraSeconds: TimeInterval = 0
+    var clamSeconds: TimeInterval = 0
     var summary: String {
         "YARA \(ranYara ? "\(yaraHits)" : "未実行") / ClamAV \(ranClam ? "\(clamHits)" : "未実行") 件"
     }
@@ -173,18 +176,23 @@ struct ScanReport {
 enum ScanStep: String { case idle = "待機中", definitions = "定義を更新中", yara = "YARA スキャン中", clam = "ClamAV スキャン中" }
 
 enum SecurityScanner {
-    /// 検索対象。設定の対象＋LaunchAgents/Daemons が参照する実行ファイル。親が対象に含まれるものは除く。
-    static func buildTargets(settings: Settings, loginItems: [LoginItem]) -> [URL] {
+    /// 検索対象。設定の対象＋LaunchAgents/Daemons が参照する実行ファイル。
+    /// YARA は全対象、ClamAV は deepScan でなければ /Applications を除く（参照先の実行ファイルは個別に含める）。
+    static func buildTargets(settings: Settings, loginItems: [LoginItem]) -> (yara: [URL], clam: [URL]) {
         let fm = FileManager.default
-        var urls = settings.scanTargets.map { URL(fileURLWithPath: $0) }.filter { fm.fileExists(atPath: $0.path) }
-        let dirs = urls
-        for p in loginItems.compactMap(\.program) {
-            let u = URL(fileURLWithPath: p).standardizedFileURL
-            guard fm.fileExists(atPath: u.path), !dirs.contains(where: { SafeTrash.isInside(u, of: $0) }),
-                  !urls.contains(u) else { continue }
-            urls.append(u)
+        let dirs = settings.scanTargets.map { URL(fileURLWithPath: $0) }.filter { fm.fileExists(atPath: $0.path) }
+        let programs = loginItems.compactMap(\.program).map { URL(fileURLWithPath: $0).standardizedFileURL }
+            .filter { fm.fileExists(atPath: $0.path) }
+        func assemble(_ ds: [URL]) -> [URL] {
+            var urls = ds
+            for u in programs where !ds.contains(where: { SafeTrash.isInside(u, of: $0, strict: false) }) && !urls.contains(u) {
+                urls.append(u)
+            }
+            return urls
         }
-        return urls
+        let apps = URL(fileURLWithPath: "/Applications")
+        let clamDirs = settings.deepScan ? dirs : dirs.filter { !SafeTrash.isInside($0, of: apps, strict: false) }
+        return (assemble(dirs), assemble(clamDirs))
     }
 }
 
@@ -200,6 +208,12 @@ final class SecurityModel {
     private var task: Task<Void, Never>?
 
     func refreshStatus() async { status = await XProtect.status() }
+
+    /// スキャン完了まで待つ（スマートケア用）
+    func scan(state: AppState) async {
+        start(state: state)
+        await task?.value
+    }
 
     func start(state: AppState) {
         guard !running else { return }
@@ -220,7 +234,8 @@ final class SecurityModel {
         do {
             let items = LoginItems.scan()
             let targets = SecurityScanner.buildTargets(settings: settings, loginItems: items)
-            report.targetCount = targets.count
+            report.targetCount = targets.yara.count
+            report.deep = settings.deepScan
 
             // 1) ClamAV 定義更新
             if let fresh = Tools.path("freshclam") {
@@ -239,9 +254,11 @@ final class SecurityModel {
                 let ver = XProtect.version() ?? "\(XProtect.updated()?.timeIntervalSince1970 ?? 0)"
                 do {
                     try await YaraEngine.ensureCompiled(rules: XProtect.yaraRules, version: ver, yarac: yarac)
+                    let ty = Date()
                     var hits: [Detection] = []
-                    for t in targets { hits += try await YaraEngine.scan(compiled: YaraEngine.compiledURL, target: t, yara: yara) }
+                    for t in targets.yara { hits += try await YaraEngine.scan(compiled: YaraEngine.compiledURL, target: t, yara: yara) }
                     report.yaraHits = hits.count; report.ranYara = true
+                    report.yaraSeconds = Date().timeIntervalSince(ty)
                     found += hits
                 } catch is CancellationError { throw CancellationError() }
                 catch { report.warnings.append("\(error)") }
@@ -252,8 +269,10 @@ final class SecurityModel {
             if let clam = Tools.path("clamscan") {
                 step = .clam
                 do {
-                    let hits = try await ClamEngine.scan(targets: targets, clamscan: clam)
+                    let tc = Date()
+                    let hits = try await ClamEngine.scan(targets: targets.clam, clamscan: clam)
                     report.clamHits = hits.count; report.ranClam = true
+                    report.clamSeconds = Date().timeIntervalSince(tc)
                     found += hits
                 } catch is CancellationError { throw CancellationError() }
                 catch { report.warnings.append("\(error)") }
@@ -273,7 +292,7 @@ final class SecurityModel {
         state.lastScanSummary = "セキュリティ: \(total == 0 ? "脅威なし" : "脅威 \(total) 件")（\(report.date.formatted(date: .abbreviated, time: .shortened))）"
         try? History.append(HistoryEntry(date: Date(), kind: .scan, target: "セキュリティスキャン（\(report.targetCount) 対象）",
                                          bytes: 0, result: total == 0 ? "clean" : "found",
-                                         detail: "\(report.summary)、無視 \(report.hidden) 件、\(Int(report.duration)) 秒"))
+                                         detail: "\(report.summary)、\(report.deep ? "じっくり" : "標準")モード、無視 \(report.hidden) 件、\(Int(report.duration)) 秒"))
     }
 
     func trash(_ d: Detection) {

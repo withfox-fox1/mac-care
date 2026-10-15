@@ -60,6 +60,7 @@ struct MainWindow: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             switch selection ?? .smartCare {
+            case .smartCare: SmartCareView()
             case .cleanup: CleanupView()
             case .security: SecurityView()
             case .apps: AppsView()
@@ -71,7 +72,8 @@ struct MainWindow: View {
             case let item: PlaceholderView(item: item)
             }
         }
-        .frame(minWidth: 760, minHeight: 480)
+        .frame(minWidth: 960, minHeight: 620)
+        .background(WindowConfigurator())
         .onAppear { applyRequest(); WindowOpener.bringToFront() }
         .onChange(of: state.requestedSection) { applyRequest() }
     }
@@ -81,7 +83,7 @@ struct MainWindow: View {
         if let item = SidebarItem.from(name) {
             selection = item
             // --scan 指定時のみ、表示後に読み取り専用スキャンを自動開始する
-            if CommandLine.arguments.contains("--scan") { state.autoScanSection = item.rawValue }
+            if state.launchScanPending { state.autoScanSection = item.rawValue; state.launchScanPending = false }
         }
         state.requestedSection = nil
         WindowOpener.bringToFront()
@@ -119,41 +121,94 @@ struct HistoryView: View {
     }
 }
 
+/// ウィンドウのタイトル文字を隠す（ペイン見出しと重複するため）
+struct WindowConfigurator: NSViewRepresentable {
+    final class V: NSView {
+        var obs: NSKeyValueObservation?
+        override func viewDidMoveToWindow() {
+            guard let w = window else { return }
+            w.titleVisibility = .hidden
+            // navigationTitle の変更で戻されないよう、タイトル変更のたびに隠し直す
+            obs = w.observe(\.title) { w, _ in w.titleVisibility = .hidden }
+        }
+    }
+    func makeNSView(context: Context) -> NSView { V() }
+    func updateNSView(_ v: NSView, context: Context) {}
+}
+
 struct SettingsView: View {
     @Environment(AppState.self) private var state
+    @State private var launchAtLogin = LaunchAtLogin.isEnabled
+    @State private var launchError: String? = nil
 
-    var body: some View {
-        Form {
-            Section("外部ツール") {
-                ForEach(state.tools) { t in
-                    LabeledContent(t.name) {
-                        if let p = t.path {
-                            Text(p).foregroundStyle(.secondary).textSelection(.enabled)
-                        } else {
-                            Text("未インストール").foregroundStyle(.orange)
-                        }
-                    }
-                }
-                if state.tools.contains(where: { !$0.isAvailable }) {
-                    Text("導入コマンド: \(Tools.installHint)")
-                        .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                }
+    private func pickFolder(_ add: @escaping (String) -> Void) {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true; p.canChooseFiles = false; p.allowsMultipleSelection = true
+        if p.runModal() == .OK { p.urls.forEach { add($0.path) } }
+    }
+
+    @ViewBuilder private func pathList(_ title: String, _ binding: Binding<[String]>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Button("追加…") { pickFolder { p in if !binding.wrappedValue.contains(p) { binding.wrappedValue.append(p) } } }
             }
-            Section("設定値（読み取り専用）") {
-                let s = state.settings
-                LabeledContent("大容量ファイルの閾値", value: "\(s.largeFileThresholdMB) MB")
-                LabeledContent("検索範囲", value: s.largeFileRoots.joined(separator: ", "))
-                LabeledContent("node_modules 未更新日数", value: "\(s.nodeModulesStaleDays) 日")
-                LabeledContent("定期スキャン", value: s.scheduledScanEnabled ? "有効" : "無効")
-                LabeledContent("スキャン間隔", value: "\(s.scanIntervalDays) 日")
-                LabeledContent("スキャン対象", value: s.scanTargets.joined(separator: ", "))
-                LabeledContent("無視リスト", value: "\(s.ignoredDetections.count) 件")
-                LabeledContent("前回の定期実行",
-                               value: s.lastScheduledRun?.formatted(date: .abbreviated, time: .shortened) ?? "なし")
+            ForEach(binding.wrappedValue, id: \.self) { p in
+                HStack {
+                    Text(p).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button { binding.wrappedValue.removeAll { $0 == p } } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless)
+                }
             }
         }
-        .formStyle(.grouped)
-        .navigationTitle("設定")
-        .onAppear { state.refresh() }
+    }
+
+    var body: some View {
+        @Bindable var st = state
+        PaneScaffold(title: "設定", subtitle: "変更は自動で保存されます。") { EmptyView() } content: {
+            Form {
+                Section("外部ツール") {
+                    ForEach(state.tools) { t in
+                        LabeledContent(t.name) {
+                            if let p = t.path { Text(p).foregroundStyle(.secondary).textSelection(.enabled) }
+                            else { Text("未インストール").foregroundStyle(.orange) }
+                        }
+                    }
+                    if state.tools.contains(where: { !$0.isAvailable }) {
+                        Text("導入コマンド: \(Tools.installHint)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                }
+                Section("一般") {
+                    Toggle("ログイン時に MacCare を起動", isOn: Binding(get: { launchAtLogin }, set: { on in
+                        do { try LaunchAtLogin.set(on); launchError = nil } catch { launchError = "\(error.localizedDescription)" }
+                        launchAtLogin = LaunchAtLogin.isEnabled
+                    }))
+                    if let e = launchError { Text(e).font(.caption).foregroundStyle(.orange) }
+                    Toggle("定期スキャンを有効にする", isOn: $st.settings.scheduledScanEnabled)
+                    Stepper("スキャン間隔: \(st.settings.scanIntervalDays) 日", value: $st.settings.scanIntervalDays, in: 1...60)
+                    LabeledContent("前回の定期実行",
+                                   value: st.settings.lastScheduledRun?.formatted(date: .abbreviated, time: .shortened) ?? "なし")
+                }
+                Section("クリーンアップ・大容量ファイル") {
+                    Stepper("大容量ファイルの閾値: \(st.settings.largeFileThresholdMB) MB", value: $st.settings.largeFileThresholdMB, in: 50...50_000, step: 50)
+                    Stepper("node_modules を古いとみなす日数: \(st.settings.nodeModulesStaleDays) 日", value: $st.settings.nodeModulesStaleDays, in: 7...730, step: 7)
+                    pathList("検索範囲", $st.settings.largeFileRoots)
+                }
+                Section("セキュリティ") {
+                    Toggle("じっくりスキャン（ClamAV で /Applications も対象にする。時間がかかります）", isOn: $st.settings.deepScan)
+                    pathList("スキャン対象（YARA / ClamAV）", $st.settings.scanTargets)
+                    LabeledContent("無視リスト", value: "\(st.settings.ignoredDetections.count) 件")
+                }
+            }
+            .formStyle(.grouped)
+        }
+        .onAppear { state.refresh(); launchAtLogin = LaunchAtLogin.isEnabled }
+        .onChange(of: state.settings) { _, new in
+            var disk = Settings.load()
+            disk.mergeEditable(from: new)
+            try? disk.save()
+        }
     }
 }

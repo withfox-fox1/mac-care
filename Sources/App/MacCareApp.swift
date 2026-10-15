@@ -30,6 +30,7 @@ enum WindowOpener {
             NSApp.activate(ignoringOtherApps: true)
             for w in NSApp.windows where !(w is NSPanel) && w.canBecomeMain {
                 if w.isMiniaturized { w.deminiaturize(nil) }
+                w.collectionBehavior.insert(.moveToActiveSpace)   // 別の Space で開かないようにする
                 w.makeKeyAndOrderFront(nil)
                 w.orderFrontRegardless()
             }
@@ -37,7 +38,10 @@ enum WindowOpener {
         front()
         for delay in [0.2, 0.6, 1.2, 2.5, 4.0, 6.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                let visible = NSApp.windows.contains { !($0 is NSPanel) && $0.canBecomeMain && $0.isVisible }
+                let visible = NSApp.windows.contains {
+                    !($0 is NSPanel) && $0.canBecomeMain && $0.isVisible && $0.isOnActiveSpace && $0.occlusionState.contains(.visible)
+                }
+                if !visible { action?() }   // openWindow を再実行して既存ウィンドウを前面に出す
                 if !visible || delay < 1 { front() }
             }
         }
@@ -47,7 +51,12 @@ enum WindowOpener {
     static func handleLaunchArguments(state: AppState) {
         guard !handledArgs else { return }
         handledArgs = true
+        state.startBackgroundServices()
         let args = CommandLine.arguments
+        // 検証用: 定期スキャンを今すぐ実行（読み取り専用）
+        if args.contains("--run-scheduled-now") {
+            Task { await state.scheduler.tick(state: state, force: true) }
+        }
         guard let i = args.firstIndex(of: "--open-window") else { return }
         state.requestedSection = i + 1 < args.count ? args[i + 1] : "smartCare"
         open()
@@ -57,7 +66,8 @@ enum WindowOpener {
 struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
-        Image(systemName: "sparkles")
+        let state = AppState.shared
+        Image(systemName: state.needsAttention ? "exclamationmark.triangle.fill" : "sparkles")
             .onAppear {
                 WindowOpener.action = { openWindow(id: "main") }
                 WindowOpener.handleLaunchArguments(state: AppState.shared)
@@ -85,6 +95,6 @@ struct MacCareApp: App {
                 .onAppear { NSApp.setActivationPolicy(.regular) }
                 .onDisappear { NSApp.setActivationPolicy(.accessory) }
         }
-        .defaultSize(width: 920, height: 600)
+        .defaultSize(width: 1100, height: 720)
     }
 }
