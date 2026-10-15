@@ -168,6 +168,8 @@ struct ScanReport {
     var deep = false
     var yaraSeconds: TimeInterval = 0
     var clamSeconds: TimeInterval = 0
+    var yaraTargetSeconds: [(String, TimeInterval)] = []
+    var freshclamSeconds: TimeInterval = 0
     var summary: String {
         "YARA \(ranYara ? "\(yaraHits)" : "未実行") / ClamAV \(ranClam ? "\(clamHits)" : "未実行") 件"
     }
@@ -241,7 +243,9 @@ final class SecurityModel {
             if let fresh = Tools.path("freshclam") {
                 step = .definitions
                 if FileManager.default.fileExists(atPath: ClamEngine.freshclamConf(freshclam: fresh).path) {
+                    let tf = Date()
                     let r = try await Shell.run(fresh, [])
+                    report.freshclamSeconds = Date().timeIntervalSince(tf)
                     if r.exitCode != 0 { report.warnings.append("定義の更新に失敗しました（既存の定義でスキャンします）: \(r.stderr.split(separator: "\n").last ?? "")") }
                 } else {
                     report.warnings.append("freshclam.conf がありません（\(ClamEngine.freshclamConf(freshclam: fresh).path)）。install.sh で設定してください。")
@@ -256,7 +260,11 @@ final class SecurityModel {
                     try await YaraEngine.ensureCompiled(rules: XProtect.yaraRules, version: ver, yarac: yarac)
                     let ty = Date()
                     var hits: [Detection] = []
-                    for t in targets.yara { hits += try await YaraEngine.scan(compiled: YaraEngine.compiledURL, target: t, yara: yara) }
+                    for t in targets.yara {
+                        let tt = Date()
+                        hits += try await YaraEngine.scan(compiled: YaraEngine.compiledURL, target: t, yara: yara)
+                        report.yaraTargetSeconds.append((t.lastPathComponent, Date().timeIntervalSince(tt)))
+                    }
                     report.yaraHits = hits.count; report.ranYara = true
                     report.yaraSeconds = Date().timeIntervalSince(ty)
                     found += hits
@@ -292,7 +300,7 @@ final class SecurityModel {
         state.lastScanSummary = "セキュリティ: \(total == 0 ? "脅威なし" : "脅威 \(total) 件")（\(report.date.formatted(date: .abbreviated, time: .shortened))）"
         try? History.append(HistoryEntry(date: Date(), kind: .scan, target: "セキュリティスキャン（\(report.targetCount) 対象）",
                                          bytes: 0, result: total == 0 ? "clean" : "found",
-                                         detail: "\(report.summary)、\(report.deep ? "じっくり" : "標準")モード、無視 \(report.hidden) 件、\(Int(report.duration)) 秒"))
+                                         detail: "\(report.summary)、\(report.deep ? "じっくり" : "標準")モード、無視 \(report.hidden) 件、\(Int(report.duration)) 秒（定義更新 \(Int(report.freshclamSeconds)) 秒・YARA \(Int(report.yaraSeconds)) 秒［\(report.yaraTargetSeconds.sorted { $0.1 > $1.1 }.prefix(3).map { "\($0.0) \(Int($0.1))秒" }.joined(separator: ", "))］・ClamAV \(Int(report.clamSeconds)) 秒、負荷 \(String(format: "%.1f", Power.loadAverage()))）"))
     }
 
     /// アプリバンドル内のファイルか（含まれる .app を返す）

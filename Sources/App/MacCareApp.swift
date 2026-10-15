@@ -71,11 +71,29 @@ enum WindowOpener {
     }
 }
 
+/// メニューバー用テンプレート画像（Resources の PNG。@2x は自動選択）。見つからなければ SF Symbol にする。
+enum MenuBarIcon {
+    static func image(warning: Bool) -> NSImage? {
+        guard let img = Bundle.main.image(forResource: warning ? "MenuBarIconWarning" : "MenuBarIcon") else { return nil }
+        img.size = NSSize(width: 18, height: 18)
+        img.isTemplate = true   // ライト/ダークに自動で合わせる
+        return img
+    }
+}
+
 struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         let state = AppState.shared
-        Image(systemName: state.needsAttention ? "exclamationmark.triangle.fill" : "sparkles")
+        let warning = state.needsAttention
+        Group {
+            if let img = MenuBarIcon.image(warning: warning) {
+                Image(nsImage: img)
+            } else {
+                Image(systemName: warning ? "exclamationmark.triangle.fill" : "sparkles")
+            }
+        }
+        .opacity(state.smartCare.running ? 0.5 : 1)   // スキャン中は薄く表示
             .onAppear {
                 WindowOpener.action = { openWindow(id: "main") }
                 WindowOpener.handleLaunchArguments(state: AppState.shared)
@@ -87,6 +105,17 @@ struct MenuBarLabel: View {
 struct MacCareApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var state = AppState.shared
+
+    init() {
+        // アンインストール用: ログイン項目の登録を解除して終了する（ウィンドウは開かない）
+        if CommandLine.arguments.contains("--unregister-login-item") {
+            do { try LaunchAtLogin.set(false); print("ログイン項目の登録を解除しました") }
+            catch { print("解除に失敗: \(error.localizedDescription)") }
+            // 再登録されないよう、初期登録済みフラグを立てておく
+            var s = Settings.load(); s.launchAtLoginInitialized = true; try? s.save()
+            exit(0)
+        }
+    }
 
     var body: some Scene {
         MenuBarExtra {

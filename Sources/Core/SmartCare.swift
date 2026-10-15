@@ -80,6 +80,14 @@ enum Power {
     }
 }
 
+extension Power {
+    /// 直近1分のロードアベレージ（スキャン時間の変動要因の記録用）
+    static func loadAverage() -> Double {
+        var l = [Double](repeating: 0, count: 3)
+        return getloadavg(&l, 3) > 0 ? l[0] : 0
+    }
+}
+
 enum Notifier {
     /// 通知を送る。権限は初回に要求する。戻り値は「送信を依頼できたか」
     @discardableResult

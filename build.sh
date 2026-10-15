@@ -16,6 +16,9 @@ swiftc -O -swift-version 5 $(find Sources -name '*.swift') \
   -o "$APP/Contents/MacOS/MacCare"
 
 cp Info.plist "$APP/Contents/Info.plist"
+# アプリアイコンとメニューバー用アイコンを同梱
+mkdir -p "$APP/Contents/Resources"
+cp Resources/AppIcon.icns Resources/MenuBarIcon*.png "$APP/Contents/Resources/"
 
 # Apple Development 証明書があればそれで、なければアドホック署名
 IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/{print $2; exit}')
@@ -26,6 +29,9 @@ if [[ "${1:-}" == "install" ]]; then
   pkill -x MacCare 2>/dev/null || true
   rm -rf /Applications/MacCare.app
   cp -R "$APP" /Applications/
+  # Dock / Finder のアイコンキャッシュを更新
+  touch /Applications/MacCare.app
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/MacCare.app >/dev/null 2>&1 || true
   open /Applications/MacCare.app
   echo "Installed: /Applications/MacCare.app"
 fi

@@ -566,6 +566,15 @@ let lib5 = mk("lib5", dir: true)
 do { _ = try AppUninstaller.uninstall(app: info5, related: [], isRunning: { polled += 1; return true }, library: lib5, appRoots: [apps]); check(false, "再確認で実行中なら拒否") }
 catch { check(polled == 1 && fm.fileExists(atPath: app5.path), "アンインストール: 削除直前に実行中を再確認して拒否") }
 
+
+// --- 残骸: macOS 管理の設定を除外 ---
+let lib6 = mk("lib6", dir: true)
+for rel in ["Preferences/org.cups.PrintingPrefs.plist", "Preferences/.GlobalPreferences.plist", "Preferences/loginwindow.plist", "Preferences/pbs.plist",
+            "Preferences/ContextStoreAgent.plist", "Preferences/diagnostics_agent.plist", "Preferences/com.openssh.ssh-agent.plist", "Preferences/org.openssh.x.plist",
+            "Preferences/systemgroup.com.apple.x.plist", "Group Containers/group.com.apple.notes/a", "Preferences/com.realgone.app.plist"] { _ = mk("lib6/\(rel)") }
+let lo6 = Leftovers.find(library: lib6, installedIDs: [], runningIDs: [], isInstalled: { _ in false }).map(\.url.lastPathComponent)
+check(lo6 == ["com.realgone.app.plist"], "残骸: org.cups/openssh/com.apple/ドット始まり/非ドメイン形式の設定は除外")
+check(Leftovers.isSystemOwned("org.cups.printingprefs") && Leftovers.isSystemOwned("group.com.apple.x") && !Leftovers.isSystemOwned("com.vercel.cli"), "残骸: システム管理名の判定")
 // --- Security E2E（ツールが無ければ SKIP） ---
 func runSecurityTests() async {
     guard let yara = Tools.path("yara"), let yarac = Tools.path("yarac") else { print("SKIP YARA テスト (yara/yarac なし)"); return await clamTests() }

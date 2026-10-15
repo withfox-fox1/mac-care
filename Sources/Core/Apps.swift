@@ -155,6 +155,13 @@ enum Leftovers {
         return parts.allSatisfy { !$0.isEmpty && $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } }
     }
 
+    /// macOS 自身が管理するため残骸扱いしない名前（前方一致、小文字）
+    static let systemOwnedPrefixes = ["org.cups.", "com.apple.", "group.com.apple.", "systemgroup.", "com.openssh.", "org.openssh.",
+                                      "org.x.", "org.freedesktop."]
+    static func isSystemOwned(_ lowercasedName: String) -> Bool {
+        lowercasedName.contains("com.apple.") || systemOwnedPrefixes.contains { lowercasedName.hasPrefix($0) }
+    }
+
     /// LaunchServices がアプリとして認識している ID か
     static func systemKnowsApp(_ id: String) -> Bool {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil
@@ -177,7 +184,7 @@ enum Leftovers {
                 if n.hasPrefix(".") { continue }
                 if sub == "Preferences" { guard n.hasSuffix(".plist") else { continue }; n = String(n.dropLast(6)) }
                 let l = n.lowercased()
-                guard looksLikeBundleID(n), !l.contains("com.apple.") else { continue }
+                guard looksLikeBundleID(n), !isSystemOwned(l) else { continue }
                 if vendors.contains(vendor(l)) { continue }
                 if known.contains(where: { l == $0 || l.hasPrefix($0 + ".") || $0.hasPrefix(l + ".") }) { continue }
                 // Group Containers は「TEAMID.<bundle id>」「group.<bundle id>」形式。先頭要素を除いた ID も確認する

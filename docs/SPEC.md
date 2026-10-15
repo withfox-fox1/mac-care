@@ -39,7 +39,7 @@ CleanMyMac（現行 CleanMyMac 5 / v5.7.1）を解約しても困らない状態
 ### 2.3 クリーンアップ（不要データ）
 
 - 対象は**許可リスト方式**（リストにないパスには一切触れない）。初期リスト：
-  - `~/Library/Caches/*`（実行中アプリのキャッシュは除外）
+  - `~/Library/Caches/*`（除外：ドットで始まる項目、`com.apple.*`、実行中アプリ・プロセスに関連するもの（バンドルID・実行ファイル名・表示名・提供元）、再取得が高コスト／システム管理のもの（ms-playwright、CloudKit、GeoServices、PassKit、GameKit、FamilyCircle）。除外した項目は理由つきで画面に表示する）
   - `~/Library/Logs/*`
   - `~/.npm/_cacache`、Homebrew キャッシュ（`brew --cache`）、pip キャッシュ
   - Xcode：`DerivedData`、古い `iOS DeviceSupport`、`Archives`（存在する場合）
@@ -48,6 +48,8 @@ CleanMyMac（現行 CleanMyMac 5 / v5.7.1）を解約しても困らない状態
 - 削除は `FileManager.trashItem`（ゴミ箱へ移動）。完全削除はしない（ゴミ箱を空にする操作を除く）。
 - 項目ごとにサイズ・説明・「消すとどうなるか」を表示し、チェックで選択。
 - 対象外として明示：Claude の `vm_bundles`、`voicevox_engine`、アプリの Application Support 全般。
+- SafeTrash の拒否リスト：`/`・`/System`・`/Library`・`/Applications` 等、ホーム直下の Desktop／Documents／Downloads／Pictures／Movies／Music／Public／Applications 自体、`~/Library` の Mobile Documents／CloudStorage／Keychains／Mail／Messages／Accounts／Photos／Safari／Cookies、`Containers/com.apple.*`、`Group Containers/group.com.apple.*`、`*.photoslibrary`／`*.musiclibrary`。
+- すべての破壊的操作は確認ダイアログを経由し、**既定（Return）はキャンセル**。実行ボタンは明示的なクリックが必要。確認で見せた内容（スナップショット）だけを実行する。
 
 ### 2.4 大容量ファイル
 
@@ -67,9 +69,10 @@ CleanMyMac（現行 CleanMyMac 5 / v5.7.1）を解約しても困らない状態
 
 - `/Applications`・`~/Applications` のアプリを一覧（サイズ、最終使用日、入手元：App Store／その他）。
 - 選択したアプリの関連ファイルを Bundle ID・アプリ名で検索：`~/Library` 配下の Application Support / Caches / Containers / Group Containers / Preferences / Saved Application State / HTTPStorages / WebKit / Logs / LaunchAgents。
-- 一覧で確認してからまとめてゴミ箱へ。Apple 製アプリと実行中のアプリは対象外。
+- 一覧で確認してからまとめてゴミ箱へ。Apple 製アプリと実行中のアプリ（削除の直前に再確認）は対象外。
+- 関連ファイルは Bundle ID 完全一致のみ既定で選択。前方一致のみ・名前のみ一致は既定で未選択。より具体的な別アプリ（例：Chrome と Chrome Canary）のデータは除外する。削除の許可範囲は検索した各サブフォルダに限る。
 - root 所有のファイル・`/Library` 配下（管理者権限が必要）は v1 では「表示のみ＋Finder で開く」。
-- 「残骸」表示：アプリ本体が存在しない Bundle ID のフォルダを一覧化。
+- 「残骸」表示：アプリ本体が存在しない Bundle ID のフォルダを一覧化（既定で未選択）。LaunchServices に登録済みのID、iOS/iPadOS アプリ（Wrapper）、同じ提供元のアプリが入っているもの、macOS 管理の設定（`org.cups.*`、`com.openssh.*`、`com.apple.*` など）は除外。`Containers`／`Group Containers` は書類を含み得るため**表示のみ**（削除不可）。
 
 ### 2.7 ログイン項目・バックグラウンド項目
 
@@ -82,14 +85,16 @@ CleanMyMac（現行 CleanMyMac 5 / v5.7.1）を解約しても困らない状態
 - **常時保護**は macOS 標準（XProtect／Gatekeeper）に任せる。アプリは状態（XProtect のバージョン・更新日、Gatekeeper 有効か、SIP 有効か）を表示する。
 - **スキャン**：
   - YARA：`/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.yara` を `yarac` でコンパイル（XProtect 更新を検知したら再コンパイル）。
-  - ClamAV：`clamscan`。スキャン前に `freshclam` で定義を更新。
-  - 対象（初期値）：ダウンロード、デスクトップ、書類、`/Applications`、LaunchAgents/Daemons の参照先実行ファイル。
+  - ClamAV：`clamscan`。スキャン前に `freshclam` で定義を更新。**標準モードでは `/Applications` を除外**（時間短縮）。設定の「じっくりスキャン」（`deepScan`、既定オフ）で含める。
+  - 対象（初期値）：ダウンロード、デスクトップ、書類、`/Applications`（YARA のみ標準対象）、LaunchAgents/Daemons の参照先実行ファイル（ClamAV にも個別に渡す）。
+  - YARA は `-p`（マルチスレッド）を使わない（~/Documents で無期限にハングしたため）。
+  - アプリバンドル内のファイルの検出は単独削除せず、アプリ単位の削除へ誘導する。
 - 検出時：ファイルパス・検出名・エンジン名を表示。操作は「ゴミ箱へ」「Finder で表示」「無視（記録）」。
 - 外部送信はしない（VirusTotal 連携は将来検討。実装する場合もハッシュ値のみ）。
 
 ### 2.9 定期実行
 
-- アプリ内スケジューラ（ログイン項目として常駐）で週1回：ClamAV 定義更新 → セキュリティスキャン → 不要データ集計 → ログイン項目の変化チェック → 結果を通知。
+- アプリ内スケジューラ（ログイン項目として常駐。起動の5分後に遅延確認、以後1時間ごと。バッテリー駆動で残量20%未満・実行中はスキップ）で週1回：ClamAV 定義更新 → セキュリティスキャン → 不要データ集計 → ログイン項目の変化チェック → 結果を通知。
 - **自動で削除はしない。**
 
 ### 2.10 履歴
@@ -105,7 +110,7 @@ CleanMyMac（現行 CleanMyMac 5 / v5.7.1）を解約しても困らない状態
 | 権限 | フルディスクアクセスは任意（なくても動く。必要な機能だけ案内を出す）。管理者権限は v1 では要求しない |
 | 外部送信 | なし（ClamAV 定義のダウンロードを除く） |
 | 性能 | UI を止めない（スキャン・変換はバックグラウンド）。大容量ファイル検索はホーム全体で数分以内 |
-| 対応環境 | macOS 14 以降（SwiftUI の都合。要検証）、Apple Silicon。開発・確認は macOS 27 |
+| 対応環境 | macOS 14 以降（`install.sh` が確認する。SwiftUI の Observation の都合）、Apple Silicon。開発・確認は macOS 27 |
 | 依存 | Homebrew の `yara`、`clamav`、`ffmpeg`。未導入時は画面で案内し、該当機能を無効表示 |
 
 ## 4. 技術構成
@@ -119,7 +124,8 @@ CleanMyMac（現行 CleanMyMac 5 / v5.7.1）を解約しても困らない状態
 ## 5. 配布
 
 - GitHub リポジトリ（`~/mac-care`）。`install.sh`（brew 依存の導入、ClamAV 設定、ビルド、/Applications へ配置）と `SETUP_PROMPT.md`（Claude Code 向け導入指示書）を用意する。
-- 公開範囲（public / private）は未決定。
+- 公開範囲：public（https://github.com/withfox-fox1/mac-care）。更新は `git pull --ff-only && ./install.sh --app-only`。
+- `uninstall.sh` はアプリとログイン項目を削除し、データ削除は確認する。brew パッケージは削除しない。
 
 ## 6. v1 でやらないこと
 
