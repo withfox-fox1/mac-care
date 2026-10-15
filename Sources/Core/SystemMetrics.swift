@@ -254,8 +254,26 @@ enum MachineInfo {
         sysctlbyname("hw.model", &buf, &size, nil, 0)
         return String(cString: buf)
     }
-    /// 機種名（新しい識別子は種別を判別できないため、バッテリーの有無で MacBook / Mac にする）
+    /// IODeviceTree:/product の product-name（例: "MacBook Air (13-inch, M5)"）。Apple Silicon で取得できる
+    static var productName: String? {
+        let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/product")
+        guard entry != 0 else { return nil }
+        defer { IOObjectRelease(entry) }
+        guard let data = IORegistryEntryCreateCFProperty(entry, "product-name" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? Data else { return nil }
+        let name = String(decoding: data.prefix { $0 != 0 }, as: UTF8.self).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? nil : name
+    }
+
+    /// 製品名から括弧内の仕様を除いた表示名（"MacBook Air (13-inch, M5)" → "MacBook Air"）
+    static func shortProductName(_ name: String) -> String {
+        let base = name.split(separator: "(", maxSplits: 1).first.map(String.init) ?? name
+        return base.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// 機種名。product-name が取れればそれを使い、取れない場合は識別子とバッテリーの有無で推定する
     static var displayName: String {
+        if let p = productName, !shortProductName(p).isEmpty { return shortProductName(p) }
         let id = modelIdentifier
         if id.hasPrefix("MacBookAir") { return "MacBook Air" }
         if id.hasPrefix("MacBookPro") { return "MacBook Pro" }

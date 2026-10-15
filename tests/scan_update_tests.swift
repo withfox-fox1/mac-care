@@ -173,4 +173,8 @@ func scanUpdateTests() {
     ri.updateAvailable = 2; ri.wakeSuggested = true
     let rall = Recommendations.all(ri)
     check(rall.map(\.kind) == [.appUpdate, .wakeSchedule] && rall[0].title == "MacCare のアップデートがあります" && rall[0].action == .navigate("settings"), "おすすめ: アップデートと起床スケジュールの提案")
+    // 機種名
+    check(MachineInfo.shortProductName("MacBook Air (13-inch, M5)") == "MacBook Air", "機種名: 括弧内を除く")
+    check(MachineInfo.shortProductName("Mac mini") == "Mac mini", "機種名: 括弧なしはそのまま")
+    check(MachineInfo.shortProductName(" (M5)") == "", "機種名: 括弧だけなら空")
 }
