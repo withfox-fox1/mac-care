@@ -6,24 +6,25 @@ struct CleanupView: View {
 
     var body: some View {
         let m = state.cleanup
-        PaneScaffold(title: "クリーンアップ", subtitle: "不要なキャッシュ・ログ・古い node_modules を確認し、ゴミ箱へ移動します。") {
+        PaneScaffold(item: .cleanup, subtitle: "不要なキャッシュ・ログ・古い node_modules を確認し、ゴミ箱へ移動します。") {
             if m.scanning || m.cleaning {
                 ProgressView().controlSize(.small)
-                Text(m.cleaning ? "ゴミ箱へ移動中…" : m.progressText).foregroundStyle(.secondary)
+                Text(m.cleaning ? "ゴミ箱へ移動中…" : m.progressText).foregroundStyle(Theme.secondary)
             }
-            if m.excludedCount > 0 { Text("除外 \(m.excludedCount) 件").font(.caption).foregroundStyle(.secondary) }
-            if let f = m.lastFreed { Text("解放: \(formatBytes(f))").foregroundStyle(.green).bold() }
+            if m.excludedCount > 0 { StatusBadge(kind: .info, "除外 \(m.excludedCount) 件") }
+            if let f = m.lastFreed { StatusBadge(kind: .ok, "解放: \(formatBytes(f))") }
             Button(m.hasScanned ? "再スキャン" : "スキャン") {
                 Task { await m.scan(settings: Settings.load()) }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.primary)
             .disabled(m.scanning || m.cleaning)
         } content: {
             VStack(spacing: 0) {
-                if let msg = m.message { Text(msg).foregroundStyle(.orange).padding(.horizontal).padding(.top, 8) }
+                if let msg = m.message { NoticeText(text: msg) }
                 if !m.hasScanned && !m.scanning {
-                    ContentUnavailableView("スキャンを実行してください", systemImage: "trash",
-                                           description: Text("削除前に必ず内容を確認できます。削除はゴミ箱への移動です。"))
+                    EmptyStateView(symbol: "sparkles", color: Theme.cleanup, message: "スキャンして、掃除できるものを確認しましょう。\n削除前に内容を確認でき、削除はゴミ箱への移動です。") {
+                        Button("スキャン") { Task { await m.scan(settings: Settings.load()) } }.buttonStyle(.primary)
+                    }
                 } else {
                     List {
                         Section("不要データ") {
@@ -32,10 +33,10 @@ struct CleanupView: View {
                         }
                         Section("ゴミ箱") { trashSection(m) }
                     }
+                    .themedList()
                 }
-                Divider()
-                HStack {
-                    Text("選択中: \(m.selectedCount) 件 / \(formatBytes(m.selectedSize))")
+                FooterBar {
+                    Text("選択中: \(m.selectedCount) 件 / \(formatBytes(m.selectedSize))").foregroundStyle(Theme.secondary)
                     Spacer()
                     Button("選択した項目をゴミ箱へ") {
                         let jobs = m.snapshotSelected()   // 確認時点の内容で固定
@@ -47,9 +48,9 @@ struct CleanupView: View {
                             }
                         }
                     }
+                        .buttonStyle(.primaryCompact)
                         .disabled(m.selectedCount == 0 || m.scanning || m.cleaning)
                 }
-                .padding()
             }
         }
         .task {
@@ -73,7 +74,7 @@ struct CleanupView: View {
                             await m.emptyTrash(settings: Settings.load())
                         }
                     }
-                }.disabled(m.trashSize == 0)
+                }.buttonStyle(.secondary).disabled(m.trashSize == 0)
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -84,7 +85,7 @@ struct CleanupView: View {
                     if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
                         NSWorkspace.shared.open(u)
                     }
-                }
+                }.buttonStyle(.secondary)
             }
         }
     }
@@ -109,7 +110,7 @@ private struct CategoryRow: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 4) {
                 Text(category.summary)
-                Text("消すと: \(category.effect)").foregroundStyle(.secondary)
+                Text("消すと: \(category.effect)").foregroundStyle(Theme.secondary)
                 if !category.excluded.isEmpty {
                     DisclosureGroup("除外した項目 \(category.excluded.count) 件") {
                         ForEach(category.excluded, id: \.self) { e in
@@ -122,7 +123,7 @@ private struct CategoryRow: View {
                     }.font(.caption)
                 }
                 if category.skipped > 0 {
-                    Text("読み取れず除外: \(category.skipped) 件").font(.caption).foregroundStyle(.orange)
+                    Text("読み取れず除外: \(category.skipped) 件").font(.caption).foregroundStyle(Theme.warn)
                 }
                 ForEach(category.items.prefix(100)) { item in
                     Toggle(isOn: itemBinding(item.id)) {

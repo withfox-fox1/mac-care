@@ -1,5 +1,7 @@
 import Foundation
+import AppKit
 import Observation
+import UserNotifications
 
 @MainActor @Observable
 final class AppState {
@@ -17,6 +19,9 @@ final class AppState {
     let loginItems = LoginItemsModel()
     let smartCare = SmartCareModel()
     let scheduler = Scheduler()
+    let metrics = MetricsModel()
+    /// 通知の許可状態（nil = 未確認）
+    var notificationsAuthorized: Bool? = nil
     /// 起動引数 --scan が未消費か（最初のセクション表示でのみ自動スキャンする）
     var launchScanPending = CommandLine.arguments.contains("--scan")
     private var backgroundStarted = false
@@ -59,5 +64,44 @@ final class AppState {
         tools = Tools.all()
         settings = Settings.load()
         history = History.readAll().reversed()
+    }
+
+    // MARK: ダッシュボード・パネル用の導出値
+
+    var healthInput: HealthInput {
+        let r = smartCare.result
+        return HealthInput(threats: r?.threats ?? 0, newOrChangedLoginItems: (r?.newLoginItems ?? 0) + (r?.changedLoginItems ?? 0),
+                           freeBytes: disk?.available, totalBytes: disk?.total, junkBytes: r?.junkBytes ?? 0,
+                           lastSmartCare: r?.date, now: Date())
+    }
+    var healthScore: Int { HealthScore.score(healthInput) }
+
+    var recommendationInput: RecommendationInput {
+        let r = smartCare.result
+        let videos = largeFiles.files.filter(\.isVideo)
+        return RecommendationInput(
+            videoCount: videos.count, videoBytes: videos.reduce(0) { $0 + $1.size },
+            cleanMyMacItems: loginItems.items.filter { $0.label.lowercased().contains("com.macpaw") }.count,
+            notificationsAuthorized: notificationsAuthorized,
+            fullDiskAccessMissing: cleanup.hasScanned ? !cleanup.trashReadable : nil,
+            threats: r?.threats ?? 0, junkBytes: r?.junkBytes ?? 0, lastSmartCare: r?.date, now: Date())
+    }
+    var recommendations: [Recommendation] { Recommendations.all(recommendationInput) }
+
+    func refreshNotificationStatus() async {
+        let s = await UNUserNotificationCenter.current().notificationSettings()
+        switch s.authorizationStatus {
+        case .authorized, .provisional, .ephemeral: notificationsAuthorized = true
+        case .denied: notificationsAuthorized = false
+        default: notificationsAuthorized = false   // 未決定も「オンにする」対象
+        }
+    }
+
+    func perform(_ action: RecAction) {
+        switch action {
+        case .navigate(let s): requestedSection = s
+        case .openURL(let u): if let url = URL(string: u) { NSWorkspace.shared.open(url) }
+        case .runSmartCare: Task { await smartCare.run(state: self) }
+        }
     }
 }

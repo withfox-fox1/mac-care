@@ -613,6 +613,93 @@ let sem3 = DispatchSemaphore(value: 0)
 Task { await runSecurityTests(); sem3.signal() }
 sem3.wait()
 
+
+// MARK: - 健康スコア・おすすめ・システムメトリクス
+func healthTests() {
+    let now = Date()
+    func inp(threats: Int = 0, login: Int = 0, free: Int64? = 500, total: Int64? = 1000, junk: Int64 = 0, last: Date? = nil) -> HealthInput {
+        HealthInput(threats: threats, newOrChangedLoginItems: login, freeBytes: free, totalBytes: total, junkBytes: junk,
+                    lastSmartCare: last ?? now, now: now)
+    }
+    check(HealthScore.score(inp()) == 100, "スコア: 問題なしは100")
+    check(HealthScore.score(inp(threats: 1)) == 70, "スコア: 脅威1件で-30")
+    check(HealthScore.score(inp(threats: 5)) == 40, "スコア: 脅威の減点は最大-60")
+    check(HealthScore.score(inp(login: 1)) == 90 && HealthScore.score(inp(login: 9)) == 80, "スコア: ログイン項目 -10/件・最大-20")
+    check(HealthScore.score(inp(free: 99, total: 1000)) == 80 && HealthScore.score(inp(free: 100, total: 1000)) == 100, "スコア: 空き10%未満で-20（ちょうど10%は対象外）")
+    check(HealthScore.score(inp(junk: 5_000_000_000)) == 95 && HealthScore.score(inp(junk: 4_999_999_999)) == 100, "スコア: 不要データ5GB以上で-5")
+    check(HealthScore.score(inp(last: now.addingTimeInterval(-15 * 86400))) == 90, "スコア: 14日超で-10")
+    check(HealthScore.score(inp(last: now.addingTimeInterval(-14 * 86400))) == 100, "スコア: ちょうど14日は対象外")
+    check(HealthScore.score(HealthInput(threats: 0, newOrChangedLoginItems: 0, freeBytes: 500, totalBytes: 1000, junkBytes: 0, lastSmartCare: nil, now: now)) == 90, "スコア: 未実行は-10")
+    check(HealthScore.score(inp(threats: 9, login: 9, free: 1, junk: 9_000_000_000, last: now.addingTimeInterval(-99 * 86400))) == 0, "スコア: 下限は0")
+    check(HealthScore.headline(80) == "Mac は良好です" && HealthScore.headline(79) == "注意が必要です"
+          && HealthScore.headline(50) == "注意が必要です" && HealthScore.headline(49) == "対処が必要です", "見出し: 80/50 の境界")
+
+    var r = RecommendationInput(now: now); r.lastSmartCare = now
+    check(Recommendations.all(r).isEmpty, "おすすめ: 問題なしなら空")
+    r.threats = 1; r.videoCount = 3; r.videoBytes = 10_000_000_000; r.cleanMyMacItems = 2; r.junkBytes = 2_000_000_000
+    r.notificationsAuthorized = false; r.fullDiskAccessMissing = true
+    let all = Recommendations.all(r)
+    check(all.first?.kind == .threats && all.first?.action == .navigate("security"), "おすすめ: 脅威が最優先")
+    check(all.map(\.kind) == [.threats, .videos, .cleanMyMac, .junk, .notifications, .fullDiskAccess], "おすすめ: 優先順")
+    check(Recommendations.top(r).count == 3, "おすすめ: 上位3件")
+    check(all[1].title.contains(formatBytes(8_000_000_000)) && all[1].action == .navigate("compress"), "おすすめ: 動画は合計の80%を見積もる")
+    r.threats = 0; r.junkBytes = 999_999_999
+    check(!Recommendations.all(r).contains { $0.kind == .junk }, "おすすめ: 不要データ1GB未満は出さない")
+    var o = RecommendationInput(now: now); o.lastSmartCare = now.addingTimeInterval(-8 * 86400)
+    check(Recommendations.all(o).first?.kind == .staleScan && Recommendations.all(o).first?.action == .runSmartCare, "おすすめ: 7日超でスマートケア")
+    o.lastSmartCare = nil
+    check(Recommendations.all(o).first?.kind == .staleScan, "おすすめ: 未実行でスマートケア")
+    var n = RecommendationInput(now: now); n.lastSmartCare = now; n.notificationsAuthorized = true
+    check(Recommendations.all(n).isEmpty, "おすすめ: 通知が許可済みなら出さない")
+    n.notificationsAuthorized = false
+    if case .openURL(let u)? = Recommendations.all(n).first?.action { check(u.contains("Notifications"), "おすすめ: 通知は設定の通知ペインを開く") }
+    else { check(false, "おすすめ: 通知は設定の通知ペインを開く") }
+}
+func metricsTests() {
+    check(MetricsMath.memoryPressure(freeLevel: 60) == 40 && MetricsMath.memoryPressure(freeLevel: 120) == 0, "メモリ: プレッシャー = 100 - level")
+    let a: [UInt32] = [100, 50, 800, 0, 100, 50, 800, 0]
+    let b: [UInt32] = [200, 100, 1000, 0, 200, 100, 1000, 0]
+    check(abs(MetricsMath.cpuLoad(prev: a, cur: b) - 42.857) < 0.01, "CPU: ティック差分から負荷を計算")
+    check(MetricsMath.cpuLoad(prev: a, cur: a) == 0, "CPU: 差分0は0%")
+    check(MetricsMath.counterDelta(prev: UInt32.max - 5, cur: 10) == 16, "ネットワーク: 32bitカウンタの桁あふれ")
+    let t0 = Date()
+    let p = NetworkCounters(perInterface: ["en0": (1000, 500)], date: t0)
+    let c = NetworkCounters(perInterface: ["en0": (5000, 2500), "en1": (1, 1)], date: t0.addingTimeInterval(2))
+    let th = NetworkCounters.throughput(prev: p, cur: c)
+    check(th.down == 2000 && th.up == 1000, "ネットワーク: スループット（新規IFは無視）")
+    check(MetricsMath.appended(Array(repeating: 1, count: 30), 2).count == 30 && MetricsMath.appended([1], 2) == [1, 2], "履歴: 末尾30件のみ保持")
+    check(MetricsMath.rate(5_000) == "5 KB/s" && MetricsMath.rate(2_500_000) == "2.5 MB/s" && MetricsMath.rate(12) == "12 B/s", "表示: 転送速度")
+    check(MetricsMath.minutes(454) == "7時間34分" && MetricsMath.minutes(42) == "42分", "表示: 残り時間")
+    check(MetricsMath.batteryCondition("Good") == "正常" && MetricsMath.batteryCondition(nil) == nil, "バッテリー: 状態の日本語化")
+
+    let ps = """
+      101  3355443 12.5 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+      102  1048576  8.0 /Applications/Google Chrome.app/Contents/Frameworks/X/Google Chrome Helper (Renderer)
+      200   204800  3.1 /usr/libexec/trustd
+      bad line
+    """
+    let ents = ProcessStats.parse(ps)
+    check(ents.count == 3 && ents[0].pid == 101 && ents[0].path.hasSuffix("Google Chrome"), "ps: 空白を含むパスを解析")
+    check(ProcessStats.appName(path: ents[1].path) == "Google Chrome" && ProcessStats.appName(path: "/usr/libexec/trustd") == "trustd", "ps: .app 単位の名前")
+    let usage = ProcessStats.aggregate(ents)
+    check(ProcessStats.topMemory(usage)?.name == "Google Chrome" && ProcessStats.topMemory(usage)?.memoryBytes == (3355443 + 1048576) * 1024, "ps: ヘルパーを合算して最大メモリ")
+    check(ProcessStats.topCPU(usage)?.cpu == 20.5, "ps: 最大CPU")
+    let sp = SpeedTest.parse("{\"dl_throughput\":123000000,\"ul_throughput\":45500000,\"responsiveness\":1000}")
+    check(sp != nil && abs(sp!.down - 123) < 0.001 && abs(sp!.up - 45.5) < 0.001 && SpeedTest.parse("oops") == nil, "networkQuality: JSON 解析")
+    let lv = BluetoothInfo.parse(Data("{\"AA\":{\"single\":80},\"BB\":{\"left\":60,\"right\":40}}".utf8))
+    check(lv["AA"]?.minimum == 80 && lv["BB"]?.minimum == 40 && BluetoothInfo.parse(Data()).isEmpty, "Bluetooth: 残量 JSON 解析")
+    var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+    let now = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 12))!
+    let d1 = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 11, minute: 42))!
+    let d2 = cal.date(from: DateComponents(year: 2026, month: 10, day: 14, hour: 18, minute: 13))!
+    let d3 = cal.date(from: DateComponents(year: 2026, month: 10, day: 3, hour: 9, minute: 5))!
+    check(ShortDate.format(d1, now: now, calendar: cal) == "今日 11:42" && ShortDate.format(d2, now: now, calendar: cal) == "昨日 18:13"
+          && ShortDate.format(d3, now: now, calendar: cal) == "10/3 09:05", "日時: 今日/昨日/それ以前")
+    check(ShortDate.duration(420) == "7分" && ShortDate.duration(42) == "42秒", "日時: 所要時間")
+}
+healthTests()
+metricsTests()
+
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")
 exit(failures == 0 ? 0 : 1)

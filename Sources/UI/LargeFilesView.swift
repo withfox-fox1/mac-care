@@ -10,20 +10,21 @@ struct LargeFilesView: View {
 
     var body: some View {
         let m = state.largeFiles
-        PaneScaffold(title: "大容量ファイル", subtitle: "設定の閾値以上のファイルを検索します（~/Library・隠しフォルダは除外）。") {
-            if m.scanning { ProgressView().controlSize(.small); Text("検索中…").foregroundStyle(.secondary) }
+        PaneScaffold(item: .largeFiles, subtitle: "設定の閾値以上のファイルを検索します（~/Library・隠しフォルダは除外）。") {
+            if m.scanning { ProgressView().controlSize(.small); Text("検索中…").foregroundStyle(Theme.secondary) }
             Button(m.hasScanned ? "再スキャン" : "スキャン") {
                 Task { await m.scan(settings: Settings.load()) }
-            }.buttonStyle(.borderedProminent).disabled(m.scanning)
+            }.buttonStyle(.primary).disabled(m.scanning)
         } content: {
             VStack(spacing: 0) {
                 if m.hasScanned || m.message != nil {
                     Text([m.info, m.message ?? ""].filter { !$0.isEmpty }.joined(separator: "　"))
-                        .font(.caption).foregroundStyle(.secondary).padding(.vertical, 6)
+                        .font(.caption).foregroundStyle(Theme.secondary).padding(.vertical, 6).frame(maxWidth: .infinity)
                 }
                 if !m.hasScanned && !m.scanning {
-                    ContentUnavailableView("スキャンを実行してください", systemImage: "externaldrive",
-                                           description: Text("閾値以上のファイルを一覧にします。"))
+                    EmptyStateView(symbol: "externaldrive.fill", color: Theme.largeFiles, message: "閾値以上の大きなファイルを探して一覧にします。") {
+                        Button("スキャン") { Task { await m.scan(settings: Settings.load()) } }.buttonStyle(.primary)
+                    }
                 } else {
                     Table(m.files.sorted(using: sortOrder), selection: $selection, sortOrder: $sortOrder) {
                         TableColumn("名前", value: \.name) { Text($0.name).lineLimit(1).truncationMode(.middle) }
@@ -34,18 +35,18 @@ struct LargeFilesView: View {
                         }.width(110)
                         TableColumn("種類", value: \.kind) { Text($0.kind) }.width(130)
                     }
+                    .themedList().alternatingRowBackgrounds(.enabled)
                 }
-                Divider()
-                HStack {
-                    Text("選択中: \(selection.count) 件 / \(formatBytes(selectedFiles.reduce(0) { $0 + $1.size }))")
+                FooterBar {
+                    Text("選択中: \(selection.count) 件 / \(formatBytes(selectedFiles.reduce(0) { $0 + $1.size }))").foregroundStyle(Theme.secondary)
                     Spacer()
                     Button("Finderで表示") {
                         NSWorkspace.shared.activateFileViewerSelecting(selectedFiles.map(\.url))
-                    }.disabled(selection.isEmpty)
+                    }.buttonStyle(.secondary).disabled(selection.isEmpty)
                     Button("圧縮キューへ追加") {
                         let n = state.compressQueue.add(selectedFiles.filter(\.isVideo).map(\.url))
                         m.message = n > 0 ? "\(n) 件を圧縮キューに追加しました。" : "追加できる動画がありません。"
-                    }.disabled(!selectedFiles.contains(where: \.isVideo))
+                    }.buttonStyle(.secondary).disabled(!selectedFiles.contains(where: \.isVideo))
                     Button("ゴミ箱へ") {
                         let targets = selectedFiles                              // 確認時点の内容で固定
                         let roots = Settings.load().largeFileRoots.map { URL(fileURLWithPath: $0) }
@@ -57,9 +58,8 @@ struct LargeFilesView: View {
                                                                  button: "ゴミ箱へ移動", snapshot: targets) { await m.trash($0, roots: roots) }
                             if done { selection = [] }
                         }
-                    }.disabled(selection.isEmpty)
+                    }.buttonStyle(.secondaryDestructive).disabled(selection.isEmpty)
                 }
-                .padding()
             }
         }
         .task {

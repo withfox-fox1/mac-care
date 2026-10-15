@@ -4,6 +4,11 @@ struct DiskInfo {
     var total: Int64
     var available: Int64
 
+    /// ボリューム名（取得できなければ「ディスク」）
+    static var volumeName: String {
+        (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeNameKey]))?.volumeName ?? "ディスク"
+    }
+
     static func current() -> DiskInfo? {
         let url = URL(fileURLWithPath: NSHomeDirectory())
         guard let v = try? url.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]),

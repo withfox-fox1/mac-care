@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum WindowOpener {
     /// MenuBarExtra のラベル表示時に openWindow を登録する
     static var action: (() -> Void)?
+    /// 検証用 --show-panel のパネル窓を開く
+    static var panelAction: (() -> Void)?
     private static var handledArgs = false
 
     static func open() {
@@ -65,8 +67,14 @@ enum WindowOpener {
         if args.contains("--run-scheduled-now") {
             Task { await state.scheduler.tick(state: state, force: true) }
         }
+        // 検証用: メニューバーパネルと同じ内容を通常ウィンドウで開く（スクリーンショット用）
+        if args.contains("--show-panel") {
+            panelAction?()
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         guard let i = args.firstIndex(of: "--open-window") else { return }
-        state.requestedSection = i + 1 < args.count ? args[i + 1] : "smartCare"
+        state.requestedSection = i + 1 < args.count ? args[i + 1] : "dashboard"
         open()
     }
 }
@@ -96,6 +104,7 @@ struct MenuBarLabel: View {
         .opacity(state.smartCare.running ? 0.5 : 1)   // スキャン中は薄く表示
             .onAppear {
                 WindowOpener.action = { openWindow(id: "main") }
+                WindowOpener.panelAction = { openWindow(id: "panel") }
                 WindowOpener.handleLaunchArguments(state: AppState.shared)
             }
     }
@@ -107,6 +116,11 @@ struct MacCareApp: App {
     @State private var state = AppState.shared
 
     init() {
+        // 子プロセス用: 接続中 Bluetooth デバイスの残量を JSON で出力して終了する（残量は都度別プロセスで読む必要がある）
+        if CommandLine.arguments.contains(BluetoothInfo.dumpArgument) {
+            BluetoothInfo.dump()
+            exit(0)
+        }
         // アンインストール用: ログイン項目の登録を解除して終了する（ウィンドウは開かない）
         if CommandLine.arguments.contains("--unregister-login-item") {
             do { try LaunchAtLogin.set(false); print("ログイン項目の登録を解除しました") }
@@ -133,5 +147,12 @@ struct MacCareApp: App {
                 .onDisappear { NSApp.setActivationPolicy(.accessory) }
         }
         .defaultSize(width: 1100, height: 720)
+
+        // 検証用（--show-panel）: パネルの内容を通常のウィンドウで表示する
+        Window("MacCare パネル", id: "panel") {
+            MenuBarView().environment(state)
+                .onAppear { NSApp.setActivationPolicy(.regular) }
+        }
+        .windowResizability(.contentSize)
     }
 }
