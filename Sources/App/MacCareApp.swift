@@ -73,6 +73,18 @@ enum WindowOpener {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
         }
+        // `--compress-list <file>`: 1行1パスのリストを圧縮キューに入れて開始し、動画圧縮画面を開く
+        if let c = args.firstIndex(of: "--compress-list"), c + 1 < args.count,
+           let text = try? String(contentsOfFile: args[c + 1], encoding: .utf8) {
+            let urls = text.split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && FileManager.default.fileExists(atPath: $0) }
+                .map { URL(fileURLWithPath: $0) }
+            if state.compressQueue.add(urls) > 0 { state.compressQueue.start() }
+            state.requestedSection = "video"
+            open()
+            return
+        }
         guard let i = args.firstIndex(of: "--open-window") else { return }
         state.requestedSection = i + 1 < args.count ? args[i + 1] : "dashboard"
         open()
