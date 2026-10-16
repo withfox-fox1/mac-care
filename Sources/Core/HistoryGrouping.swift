@@ -425,8 +425,8 @@ enum HistoryGrouping {
         s.components(separatedBy: "、").first ?? s
     }
 
-    /// 「脅威 0 件 / 不要データ 1.84 GB / 新しいログイン項目 0 件、409 秒」→「脅威 0 件・不要データ 1.84 GB」
+    /// 「脅威 0 件 / 不要データ 1.84 GB / 新しいログイン項目 0 件、409 秒」→「脅威 0 件」「不要データ 1.84 GB」の2行（項目の途中で折り返さないため）
     private static func smartCareOverview(_ s: String) -> String {
-        firstSegment(s).components(separatedBy: " / ").prefix(2).joined(separator: "・")
+        firstSegment(s).components(separatedBy: " / ").prefix(2).joined(separator: "\n")
     }
 }

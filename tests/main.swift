@@ -792,7 +792,7 @@ func historyTests() {
     st = HistoryGrouping.stats(rows, now: now, calendar: cal)
     check(rows.count == 3 && st.scanCount == 2, "履歴: スキャン回数はスマートケア一式を 1 回・無視操作は数えない")
     let sc = rows.first { $0.title == "スマートケア" }
-    check(sc?.children.count == 2 && sc?.overview == "脅威 0 件・不要データ 541 KB" && sc?.seconds == 1025 && sc?.subtitle == "定期フル・所要 17分", "履歴: スマートケア行に関連記録と概要・所要時間")
+    check(sc?.children.count == 2 && sc?.overview == "脅威 0 件\n不要データ 541 KB" && sc?.seconds == 1025 && sc?.subtitle == "定期フル・所要 17分", "履歴: スマートケア行に関連記録と概要・所要時間")
     // 通知記録が単独（直前に定期スマートケアが無い）なら 1 回と数える
     rows = HistoryGrouping.rows(from: [en(s0, .scan, "定期スキャン", 1, "no-notification-permission", "脅威 0 件")])
     check(rows.count == 1 && rows[0].countsAsScan, "履歴: 単独の通知記録も 1 回")
