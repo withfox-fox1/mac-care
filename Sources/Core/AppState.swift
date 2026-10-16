@@ -29,6 +29,9 @@ final class AppState {
     private var backgroundStarted = false
 
     /// メニューバーアイコンを警告表示にするか
+    /// ゴミ箱を開くボタンを付けるお知らせの本文（update.notice と同じ本文のときだけ有効）
+    var trashNoticeText: String? = nil
+
     var needsAttention: Bool { smartCare.result?.needsAttention ?? false }
 
     /// 常駐用の処理を一度だけ開始（ログイン時起動の初期登録・定期スキャン）
@@ -111,5 +114,43 @@ final class AppState {
         case .openURL(let u): if let url = URL(string: u) { NSWorkspace.shared.open(url) }
         case .runSmartCare: Task { await smartCare.run(state: self) }
         }
+    }
+}
+
+// MARK: - ゴミ箱移動後のお知らせ
+
+/// ゴミ箱への移動結果（お知らせ文言の生成元）
+struct TrashOutcome: Equatable {
+    var moved: Int
+    var failed: Int
+    var bytes: Int64
+
+    var isError: Bool { failed > 0 }
+
+    var message: String {
+        let size = bytes > 0 ? "（\(formatBytes(bytes))）" : ""
+        if failed == 0 { return "\(moved) 項目\(size)をゴミ箱へ移動しました。" }
+        if moved == 0 { return "\(failed) 件は移動できませんでした。" }
+        return "\(moved) 件\(size)を移動しました。\(failed) 件は移動できませんでした。"
+    }
+}
+
+enum TrashNotice {
+    /// テスト用に差し替え可能。既定は AppState のお知らせ表示
+    @MainActor static var sink: (_ text: String, _ isError: Bool) -> Void = { text, isError in
+        AppState.shared.postTrashNotice(text, isError: isError)
+    }
+    @MainActor static func post(_ o: TrashOutcome) {
+        guard o.moved + o.failed > 0 else { return }
+        sink(o.message, o.isError)
+    }
+    @MainActor static func post(text: String, isError: Bool = false) { sink(text, isError) }
+}
+
+extension AppState {
+    /// ゴミ箱移動のお知らせ。MainWindow が表示する update.notice に載せ、［ゴミ箱を開く］は NoticeBanner が付ける。
+    func postTrashNotice(_ text: String, isError: Bool) {
+        trashNoticeText = text
+        update.notice = (text, isError)
     }
 }

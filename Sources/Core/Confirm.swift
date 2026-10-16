@@ -23,11 +23,20 @@ enum Confirm {
         return a
     }
 
+    static let undoNote = "ゴミ箱から元に戻せます。"
+
+    /// 取り消せる操作には、メッセージ末尾に復元方法を付ける（完全削除は undoable: false）
+    static func fullMessage(_ message: String, undoable: Bool) -> String {
+        guard undoable, !message.contains(undoNote) else { return message }
+        return message.isEmpty ? undoNote : message + "\n" + undoNote
+    }
+
     /// 確認が取れた場合のみ action(snapshot) を実行する。戻り値は実行したか。
     @discardableResult
     static func destructive<S>(title: String, message: String, button: String, snapshot: S,
+                               undoable: Bool = true,
                                action: (S) async -> Void) async -> Bool {
-        guard presenter(title, message, button) else { return false }
+        guard presenter(title, fullMessage(message, undoable: undoable), button) else { return false }
         await action(snapshot)
         return true
     }

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// 進捗バー（Ocean テーマのアクセントグラデーション）
 struct ScanProgressBar: View {
@@ -48,13 +49,19 @@ struct NoticeBanner: View {
     let text: String
     let isError: Bool
     let dismiss: () -> Void
+    @Environment(AppState.self) private var state
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .foregroundStyle(isError ? Theme.warn : Theme.ok)
             Text(text).font(.system(size: 12.5, weight: .semibold)).lineLimit(3).textSelection(.enabled)
             Spacer(minLength: 8)
-            Button("閉じる", action: dismiss).buttonStyle(.secondary)
+            if state.trashNoticeText == text {
+                Button("ゴミ箱を開く") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash"))
+                }.buttonStyle(.secondary).fixedSize()
+            }
+            Button("閉じる", action: dismiss).buttonStyle(.secondary).fixedSize()
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         // 下の内容が透けないよう、不透明の下地の上に色を重ねる

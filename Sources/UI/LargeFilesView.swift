@@ -10,7 +10,7 @@ struct LargeFilesView: View {
 
     var body: some View {
         let m = state.largeFiles
-        PaneScaffold(item: .largeFiles, subtitle: "設定の閾値以上のファイルを検索します（~/Library・隠しフォルダは除外）。") {
+        PaneScaffold(item: .largeFiles, subtitle: "設定の閾値以上のファイルを検索します（システム用のフォルダは除外）。") {
             if m.scanning { ProgressView().controlSize(.small); Text("検索中…").foregroundStyle(Theme.secondary) }
             Button(m.hasScanned ? "再スキャン" : "スキャン") {
                 Task { await m.scan(settings: Settings.load()) }
@@ -47,7 +47,7 @@ struct LargeFilesView: View {
                         let n = state.compressQueue.add(selectedFiles.filter(\.needsCompression).map(\.url))
                         m.message = n > 0 ? "\(n) 件を圧縮キューに追加しました。" : "追加できる動画がありません（圧縮済みの動画は対象外です）。"
                     }.buttonStyle(.secondary).disabled(!selectedFiles.contains(where: \.needsCompression))
-                    Button("ゴミ箱へ") {
+                    Button("ゴミ箱へ…") {
                         let targets = selectedFiles                              // 確認時点の内容で固定
                         let roots = Settings.load().largeFileRoots.map { URL(fileURLWithPath: $0) }
                         let msg = "\(targets.count) 件 / 合計 \(formatBytes(targets.reduce(0) { $0 + $1.size }))\n"

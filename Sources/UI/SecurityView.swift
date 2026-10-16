@@ -12,6 +12,12 @@ struct SecurityView: View {
         return "検査済み \(scanned) 件 / 前回から変更なし \(cached) 件（前回までに検査済み）"
     }
 
+    /// 1 行要約（例: 結果: 脅威なし（1234 ファイルを検査））
+    private func resultLine(_ r: ScanReport, _ threats: Int) -> String {
+        let head = threats == 0 ? "脅威なし" : "脅威 \(threats) 件を検出"
+        return "結果: \(head)（\(r.targetCount) ファイルを検査）"
+    }
+
     private func coverageNote(_ last: Date?) -> String {
         guard let last else { return "。クイックは変更分のみのため、フルスキャンを一度実行してください" }
         let days = Int(Date().timeIntervalSince(last) / 86400)
@@ -32,7 +38,7 @@ struct SecurityView: View {
                     Text("クイック（変更分のみ）").tag(true)
                     Text("フル（すべて）").tag(false)
                 }.pickerStyle(.segmented).labelsHidden().fixedSize()
-                Button(m.hasScanned ? "再スキャン" : "スキャン開始") { m.start(state: state) }.buttonStyle(.primary)
+                Button(m.hasScanned ? "再スキャン" : "スキャン") { m.start(state: state) }.buttonStyle(.primary)
             }
         } content: {
             List {
@@ -41,7 +47,9 @@ struct SecurityView: View {
                         LabeledContent("XProtect", value: s.xprotectVersion.map { "バージョン \($0)" } ?? "不明")
                         LabeledContent("XProtect 更新日", value: s.xprotectUpdated?.formatted(date: .abbreviated, time: .shortened) ?? "不明")
                         LabeledContent("Gatekeeper", value: s.gatekeeper)
+                            .help(s.gatekeeper == XProtect.Protection.unknown.label ? "macOS の設定を読み取れなかっただけで、問題を示すものではありません。" : "")
                         LabeledContent("SIP", value: s.sip)
+                            .help(s.sip == XProtect.Protection.unknown.label ? "macOS の設定を読み取れなかっただけで、問題を示すものではありません。" : "")
                     } else { Text("取得中…").foregroundStyle(.secondary) }
                 }
                 Section {
@@ -51,22 +59,28 @@ struct SecurityView: View {
                 }
                 if let msg = m.message { Section { Text(msg).foregroundStyle(Theme.warn) } }
                 if let r = m.lastReport {
-                    Section("前回のスキャン") {
-                        LabeledContent("結果", value: r.summary)
+                    Section("前回のスキャン（\(r.date.formatted(date: .abbreviated, time: .shortened))）") {
+                        Text(resultLine(r, m.detections.count)).bold()
+                            .foregroundStyle(m.detections.isEmpty ? Theme.ok : Theme.danger)
                         LabeledContent("モード", value: r.deep ? "じっくり（ClamAV も /Applications を対象）" : "標準（ClamAV は /Applications を除外）")
                         LabeledContent("方式", value: r.quick ? "クイック（変更分のみ）" : "フル（すべて検査）")
-                        LabeledContent("YARA", value: engineLine(r.ranYara, r.yaraTotal, r.yaraCached, r.date))
-                        LabeledContent("ClamAV", value: engineLine(r.ranClam, r.clamTotal, r.clamCached, r.date))
-                        if r.quick, r.yaraCached + r.clamCached > 0 {
-                            LabeledContent("キャッシュ命中率", value: "\(Int((r.hitRate * 100).rounded()))%（最も古い検査: \(r.oldestCached.map { ShortDate.format($0) } ?? "—")）")
-                        }
-                        if r.clamOverLimit > 0 {
-                            LabeledContent("ClamAV の上限超（YARA のみで検査）", value: "\(r.clamOverLimit) 件")
-                        }
-                        if r.dataless > 0 { LabeledContent("iCloud 未ダウンロード（未検査）", value: "\(r.dataless) 件") }
-                        if r.unreadable > 0 { LabeledContent("読み取れず未検査", value: "\(r.unreadable) 件") }
-                        LabeledContent("対象 / 所要時間 / 無視", value: "\(r.targetCount) 件 / \(Int(r.duration)) 秒（YARA \(Int(r.yaraSeconds)) 秒・ClamAV \(Int(r.clamSeconds)) 秒）/ \(r.hidden) 件")
                         ForEach(r.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(Theme.warn) }
+                        DisclosureGroup("技術的な詳細") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                LabeledContent("エンジン別の検出数", value: r.summary)
+                                LabeledContent("YARA", value: engineLine(r.ranYara, r.yaraTotal, r.yaraCached, r.date))
+                                LabeledContent("ClamAV", value: engineLine(r.ranClam, r.clamTotal, r.clamCached, r.date))
+                                if r.quick, r.yaraCached + r.clamCached > 0 {
+                                    LabeledContent("キャッシュ命中率", value: "\(Int((r.hitRate * 100).rounded()))%（最も古い検査: \(r.oldestCached.map { ShortDate.format($0) } ?? "—")）")
+                                }
+                                if r.clamOverLimit > 0 {
+                                    LabeledContent("ClamAV の上限超（YARA のみで検査）", value: "\(r.clamOverLimit) 件")
+                                }
+                                if r.dataless > 0 { LabeledContent("iCloud 未ダウンロード（未検査）", value: "\(r.dataless) 件") }
+                                if r.unreadable > 0 { LabeledContent("読み取れず未検査", value: "\(r.unreadable) 件") }
+                                LabeledContent("対象 / 所要時間 / 無視", value: "\(r.targetCount) 件 / \(Int(r.duration)) 秒（YARA \(Int(r.yaraSeconds)) 秒・ClamAV \(Int(r.clamSeconds)) 秒）/ \(r.hidden) 件")
+                            }.padding(.vertical, 4)
+                        }
                     }
                     Section("検出結果") {
                         if m.detections.isEmpty { Label("脅威は検出されませんでした", systemImage: "checkmark.shield.fill").foregroundStyle(Theme.ok) }
@@ -82,7 +96,7 @@ struct SecurityView: View {
                                     if SecurityModel.enclosingApp(of: d.path) != nil {
                                         Button("アプリ単位で削除…") { state.requestedSection = "apps" }.buttonStyle(.secondary)
                                     } else {
-                                        Button("ゴミ箱へ") {
+                                        Button("ゴミ箱へ…") {
                                             let snap = d   // 確認時点の内容で固定
                                             Task {
                                                 await Confirm.destructive(title: "このファイルをゴミ箱へ移動しますか？", message: snap.path,
@@ -99,7 +113,7 @@ struct SecurityView: View {
                         }
                     }
                 } else if !m.running {
-                    Section { Text("スキャンを開始すると、定義更新 → YARA → ClamAV の順に実行します。").foregroundStyle(Theme.secondary) }
+                    Section { Text("最新のウイルス情報を取得してから、ファイルを 2 種類の方法で検査します。何も削除しません。").foregroundStyle(Theme.secondary) }
                 }
             }
             .themedList()

@@ -335,6 +335,9 @@ final class AppsModel {
                 : "「\(app.name)」を移動しました。関連ファイル \(r.failed.count) 件は移動できませんでした。"
             apps.removeAll { $0.id == app.id }
             related = []
+            let failedSet = Set(r.failed)
+            let bytes = app.size + plan.related.filter { !$0.isProtected && !failedSet.contains($0.url.path) }.reduce(0) { $0 + $1.size }
+            TrashNotice.post(TrashOutcome(moved: r.trashed, failed: r.failed.count, bytes: bytes))
         } catch { message = "\(error)" }
     }
 
@@ -346,6 +349,8 @@ final class AppsModel {
         let gone = Set(deletable.map(\.id))
         leftovers.removeAll { gone.contains($0.id) && !FileManager.default.fileExists(atPath: $0.url.path) }
         message = failed > 0 ? "\(failed) 件を移動できませんでした。" : nil
+        TrashNotice.post(TrashOutcome(moved: deletable.count - failed, failed: failed,
+                                      bytes: deletable.reduce(0) { $0 + $1.size }))
     }
 }
 
@@ -370,6 +375,7 @@ final class LoginItemsModel {
         do {
             try await LoginItems.disable(item)
             items.removeAll { $0.id == item.id }
+            TrashNotice.post(text: "ログイン項目「\(item.label)」を無効化し、設定ファイルをゴミ箱へ移動しました。")
         } catch { message = "\(error)" }
     }
 

@@ -60,6 +60,17 @@ struct Settings: Codable, Equatable {
         deepScan = o.deepScan
     }
 
+    /// 設定画面の「既定値に戻す」。編集可能な項目（mergeEditable の対象）だけを既定値にする。
+    /// 無視リスト・起床スケジュール・内部状態（初回登録済み・前回実行日時など）は変えない。
+    mutating func resetEditableToDefaults() {
+        mergeEditable(from: Settings())
+    }
+
+    /// 無視リストから 1 件解除する（パスとハッシュが一致するもの）
+    mutating func removeIgnored(_ item: IgnoredDetection) {
+        ignoredDetections.removeAll { $0 == item }
+    }
+
     // 項目追加に備え、欠けているキーは既定値で補う
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

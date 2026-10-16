@@ -97,14 +97,16 @@ final class LargeFilesModel {
 
     /// スナップショットされたファイルのみをゴミ箱へ。許可範囲は呼び出し側が渡す（設定の検索範囲）。
     func trash(_ targets: [LargeFile], roots: [URL]) async {
-        let failed = await Task.detached { () -> Int in
+        let (failed, movedBytes) = await Task.detached { () -> (Int, Int64) in
             var f = 0
-            for t in targets { do { try SafeTrash.trash(t.url, allowedRoots: roots) } catch { f += 1 } }
-            return f
+            var b: Int64 = 0
+            for t in targets { do { try SafeTrash.trash(t.url, allowedRoots: roots); b += t.size } catch { f += 1 } }
+            return (f, b)
         }.value
         let gone = Set(targets.map(\.id))
         files.removeAll { gone.contains($0.id) && !FileManager.default.fileExists(atPath: $0.url.path) }
         message = failed > 0 ? "\(failed) 件をゴミ箱へ移動できませんでした（検索範囲外、または保護対象）。" : nil
+        TrashNotice.post(TrashOutcome(moved: targets.count - failed, failed: failed, bytes: movedBytes))
     }
 }
 

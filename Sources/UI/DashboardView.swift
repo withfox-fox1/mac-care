@@ -130,7 +130,7 @@ struct DashboardView: View {
             StatusCard(title: "脅威", symbol: "checkmark.shield.fill", color: Theme.security, step: stepState(.security, m),
                        stepDetail: m.running ? state.security.detail : nil,
                        value: r.map { "\($0.threats) 件" },
-                       detail: r == nil ? nil : "XProtect \(state.security.status?.xprotectVersion ?? "—")・YARA・ClamAV",
+                       detail: r.map { "最終確認 \($0.date.formatted(date: .abbreviated, time: .shortened))" },
                        badge: r == nil ? (.info, "未実行") : r!.threats == 0 ? (.ok, "保護中") : (.danger, "要対応"),
                        tap: { go("security") }) { EmptyView() }
             StatusCard(title: "ログイン項目", symbol: "power", color: Theme.loginItems, step: stepState(.loginItems, m),

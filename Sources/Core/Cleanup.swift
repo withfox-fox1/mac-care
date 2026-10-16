@@ -339,6 +339,7 @@ final class CleanupModel {
         if rescan { await scan(settings: settings) }
         lastFreed = result.0
         if result.1 > 0 { message = "\(result.1) 件を移動できませんでした。" }
+        TrashNotice.post(TrashOutcome(moved: jobs.count - result.1, failed: result.1, bytes: result.0))
     }
 
     /// ゴミ箱を空にする（完全削除）。Finder 経由。AppleScript はメインスレッド外で実行する。

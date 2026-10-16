@@ -881,6 +881,100 @@ func compressCandidateTests() {
 }
 compressCandidateTests()
 
+// MARK: 設定画面（リセット対象・選択肢・ツール警告）
+func settingsScreenTests() {
+    var s = Settings()
+    s.largeFileThresholdMB = 777; s.largeFileRoots = ["/x"]; s.nodeModulesStaleDays = 14
+    s.scheduledScanEnabled = false; s.fullScanHour = 5; s.fullScanMinute = 30; s.quickScan = false
+    s.scanTargets = ["/y"]; s.deepScan = true
+    s.ignoredDetections = [IgnoredDetection(path: "/p", sha256: "h")]
+    let when = Date(timeIntervalSince1970: 1_700_000_000)
+    s.lastScheduledRun = when; s.wakeForScan = true; s.wakeScheduleTime = "04:55:00"
+    s.wakeSuggestionDismissed = true; s.launchAtLoginInitialized = true
+    s.resetEditableToDefaults()
+    var d = Settings()
+    d.ignoredDetections = s.ignoredDetections; d.lastScheduledRun = when; d.wakeForScan = true
+    d.wakeScheduleTime = "04:55:00"; d.wakeSuggestionDismissed = true; d.launchAtLoginInitialized = true
+    check(s == d, "設定リセット: 編集項目のみ既定値、無視リスト・起床・内部状態は保持")
+    check(s.largeFileThresholdMB == 500 && s.scanTargets == Settings().scanTargets && s.quickScan && !s.deepScan, "設定リセット: 編集項目の既定値")
+
+    var r = Settings(); r.ignoredDetections = [IgnoredDetection(path: "/a", sha256: "1"), IgnoredDetection(path: "/b", sha256: "2")]
+    r.removeIgnored(IgnoredDetection(path: "/a", sha256: "1"))
+    check(r.ignoredDetections == [IgnoredDetection(path: "/b", sha256: "2")], "無視リスト: 1 件解除")
+    r.removeIgnored(IgnoredDetection(path: "/b", sha256: "x"))
+    check(r.ignoredDetections.count == 1, "無視リスト: ハッシュ不一致は解除しない")
+
+    check(SettingsChoices.options([100, 500, 1000, 5000], including: 500) == [100, 500, 1000, 5000], "選択肢: 現在値が含まれていれば追加しない")
+    check(SettingsChoices.options([100, 500, 1000, 5000], including: 750) == [100, 500, 750, 1000, 5000], "選択肢: 選択肢外の現在値を追加")
+    check(SettingsChoices.sizeLabel(mb: 1000) == "1 GB" && SettingsChoices.sizeLabel(mb: 100) == "100 MB" && SettingsChoices.sizeLabel(mb: 1500) == "1500 MB", "サイズ表示")
+    check(SettingsChoices.displayPath(NSHomeDirectory()) == "ホーム" && SettingsChoices.displayPath("/Applications") == "/Applications", "パス表示: ホームは「ホーム」")
+
+    func ti(_ n: String, _ ok: Bool) -> ToolInfo { ToolInfo(name: n, path: ok ? "/opt/homebrew/bin/\(n)" : nil) }
+    let all = Tools.names.map { ti($0, true) }
+    check(SettingsChoices.missingTools(all).isEmpty, "ツール警告: 全て導入済みなら無し")
+    let noFF = Tools.names.map { ti($0, $0 != "ffmpeg") }
+    let m = SettingsChoices.missingTools(noFF)
+    check(m.count == 1 && m[0].feature == "動画の圧縮" && m[0].missing == ["ffmpeg"], "ツール警告: 圧縮ツール欠落")
+    check(SettingsChoices.missingTools([]).count == SettingsChoices.toolGroups.count, "ツール警告: 一覧が空なら全機能が欠落扱い")
+    check(SettingsChoices.missingTools(Tools.names.map { ti($0, $0 != "brew") }).isEmpty, "ツール警告: brew 単独の欠落は警告しない")
+}
+settingsScreenTests()
+
+// MARK: 第1弾: セキュリティ保存・判定・お知らせ・確認文言
+@MainActor func uxBatch1Tests() async {
+    typealias P = XProtect.Protection
+    check(XProtect.parseGatekeeper("assessments enabled\n") == .enabled, "Gatekeeper: enabled")
+    check(XProtect.parseGatekeeper("assessments disabled") == .disabled, "Gatekeeper: disabled")
+    check(XProtect.parseGatekeeper("") == .unknown && XProtect.parseGatekeeper("\n\n") == .unknown, "Gatekeeper: 空は確認不可")
+    check(XProtect.parseSIP("System Integrity Protection status: enabled.\n") == .enabled, "SIP: enabled")
+    check(XProtect.parseSIP("System Integrity Protection status: disabled.") == .disabled, "SIP: disabled")
+    check(XProtect.parseSIP("") == .unknown && XProtect.parseSIP("enabled") == .unknown, "SIP: 空・形式不明は確認不可")
+    check(XProtect.parseSIP("\nSystem Integrity Protection status: enabled.") == .enabled, "SIP: 先頭改行つき")
+    check(P.unknown.label == "確認できませんでした" && P.enabled.label == "有効" && P.disabled.label == "無効", "保護状態のラベル")
+    let st = await XProtect.status()
+    check(st != nil && st!.gatekeeper == "有効" && st!.sip == "有効", "実機: Gatekeeper/SIP を Shell.run で取得できる")
+
+    // ScanReport の保存・読込の往復
+    var r = ScanReport(); r.targetCount = 1234; r.ranYara = true; r.yaraHits = 1; r.quick = true
+    r.warnings = ["w"]; r.oldestCached = Date(timeIntervalSince1970: 1_700_000_000)
+    let det = Detection(engine: .yara, signature: "sig", path: "/tmp/x")
+    let url = work.appendingPathComponent("rt/last-security-scan.json")
+    ScanReportStore.save(StoredScan(report: r, detections: [det]), to: url)
+    let back = ScanReportStore.load(from: url)
+    check(back?.report.targetCount == 1234 && back?.report.warnings == ["w"] && back?.report.quick == true
+          && back?.report.oldestCached == r.oldestCached && back?.detections == [det], "スキャン結果の保存・読込の往復")
+    check(abs((back?.report.date.timeIntervalSince1970 ?? 0) - r.date.timeIntervalSince1970) < 1, "スキャン結果: 日時が保持される")
+    check(ScanReportStore.load(from: work.appendingPathComponent("none.json")) == nil, "スキャン結果: ファイルなしは nil")
+    try? "broken".write(to: work.appendingPathComponent("bad.json"), atomically: true, encoding: .utf8)
+    check(ScanReportStore.load(from: work.appendingPathComponent("bad.json")) == nil, "スキャン結果: 壊れたファイルは nil")
+
+    // ゴミ箱お知らせの文言
+    check(TrashOutcome(moved: 14, failed: 0, bytes: 2_300_000).message.hasPrefix("14 項目（") && TrashOutcome(moved: 14, failed: 0, bytes: 2_300_000).message.hasSuffix("）をゴミ箱へ移動しました。"), "お知らせ: 全件成功")
+    check(TrashOutcome(moved: 1, failed: 0, bytes: 0).message == "1 項目をゴミ箱へ移動しました。", "お知らせ: サイズ不明は省略")
+    let part = TrashOutcome(moved: 12, failed: 2, bytes: 0)
+    check(part.message == "12 件を移動しました。2 件は移動できませんでした。" && part.isError, "お知らせ: 一部失敗")
+    check(TrashOutcome(moved: 0, failed: 3, bytes: 0).message == "3 件は移動できませんでした。", "お知らせ: 全件失敗")
+    var posted: [(String, Bool)] = []
+    let oldSink = TrashNotice.sink
+    TrashNotice.sink = { posted.append(($0, $1)) }
+    TrashNotice.post(TrashOutcome(moved: 0, failed: 0, bytes: 0))
+    TrashNotice.post(part)
+    TrashNotice.sink = oldSink
+    check(posted.count == 1 && posted[0].1, "お知らせ: 0 件は通知しない・失敗ありはエラー扱い")
+
+    // 確認ダイアログの文言
+    check(Confirm.fullMessage("a", undoable: true) == "a\nゴミ箱から元に戻せます。", "確認: 取り消せる操作は復元案内つき")
+    check(Confirm.fullMessage("a", undoable: false) == "a", "確認: 完全削除には付けない")
+    check(Confirm.fullMessage("a\nゴミ箱から元に戻せます。", undoable: true) == "a\nゴミ箱から元に戻せます。", "確認: 二重に付けない")
+    var seen = ""
+    Confirm.presenter = { _, m, _ in seen = m; return false }
+    _ = await Confirm.destructive(title: "t", message: "m", button: "b", snapshot: 1) { _ in }
+    check(seen.hasSuffix("ゴミ箱から元に戻せます。"), "確認: destructive が既定で復元案内を付ける")
+    _ = await Confirm.destructive(title: "t", message: "m", button: "b", snapshot: 1, undoable: false) { _ in }
+    check(seen == "m", "確認: undoable:false では付けない")
+}
+_ = runMain { await uxBatch1Tests(); return true }
+
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")
 exit(failures == 0 ? 0 : 1)

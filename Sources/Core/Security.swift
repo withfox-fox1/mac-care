@@ -4,7 +4,7 @@ import Observation
 
 enum ScanEngine: String, Codable { case yara = "YARA", clamav = "ClamAV" }
 
-struct Detection: Identifiable, Hashable {
+struct Detection: Identifiable, Hashable, Codable {
     let engine: ScanEngine
     let signature: String
     let path: String
@@ -73,13 +73,65 @@ enum XProtect {
         (try? FileManager.default.attributesOfItem(atPath: infoPlist.path))?[.modificationDate] as? Date
     }
 
-    static func status() async -> SystemSecurityStatus {
-        let gk = (try? await Shell.run("/usr/sbin/spctl", ["--status"]))?.stdout ?? ""
-        let sip = (try? await Shell.run("/usr/bin/csrutil", ["status"]))?.stdout ?? ""
+    /// 保護機能の判定結果（出力文字列 → 有効 / 無効 / 確認不可）
+    enum Protection: Equatable {
+        case enabled, disabled, unknown
+        var label: String {
+            switch self {
+            case .enabled: return "有効"
+            case .disabled: return "無効"
+            case .unknown: return "確認できませんでした"
+            }
+        }
+    }
+
+    /// `spctl --status` の出力（"assessments enabled" / "assessments disabled"）
+    static func parseGatekeeper(_ output: String) -> Protection {
+        let t = output.lowercased()
+        if t.contains("assessments enabled") { return .enabled }
+        if t.contains("assessments disabled") { return .disabled }
+        return .unknown
+    }
+
+    /// `csrutil status` の出力（"System Integrity Protection status: enabled." など）
+    static func parseSIP(_ output: String) -> Protection {
+        let t = output.lowercased()
+        guard let r = t.range(of: "system integrity protection status:") else { return .unknown }
+        let rest = t[r.upperBound...]
+        let first = rest.prefix { $0 != "\n" }
+        if first.contains("disabled") { return .disabled }
+        if first.contains("enabled") { return .enabled }
+        return .unknown
+    }
+
+    /// コマンドを実行して標準出力＋標準エラーを返す。失敗（キャンセル以外）は 1 回だけ再試行する。
+    /// キャンセルされた場合は nil（前回値を保つために呼び出し側で扱う）。
+    private static func output(_ exe: String, _ args: [String]) async -> String? {
+        for attempt in 0..<2 {
+            do {
+                let r = try await Shell.run(exe, args)
+                let text = r.stdout + "\n" + r.stderr
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attempt == 1 { return text }
+            } catch is CancellationError {
+                return nil
+            } catch {
+                if attempt == 1 { return "" }
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return ""
+    }
+
+    /// 取得できなかった項目は nil。呼び出し側が直前の値を保持する。
+    static func status(previous: SystemSecurityStatus? = nil) async -> SystemSecurityStatus? {
+        // 並行実行を避け、順番に取得する
+        let gkOut = await output("/usr/sbin/spctl", ["--status"])
+        let sipOut = await output("/usr/bin/csrutil", ["status"])
+        if gkOut == nil || sipOut == nil { return previous }   // スキャンのキャンセル等。表示を「確認不可」に落とさない
         return SystemSecurityStatus(
             xprotectVersion: version(), xprotectUpdated: updated(),
-            gatekeeper: gk.contains("enabled") ? "有効" : (gk.isEmpty ? "不明" : "無効"),
-            sip: sip.contains("enabled") ? "有効" : (sip.isEmpty ? "不明" : "無効"))
+            gatekeeper: parseGatekeeper(gkOut ?? "").label,
+            sip: parseSIP(sipOut ?? "").label)
     }
 }
 
@@ -247,7 +299,7 @@ final class ClamCollector: @unchecked Sendable {
     var outcome: ClamOutcome { lock.lock(); defer { lock.unlock() }; return o }
 }
 
-struct ScanReport {
+struct ScanReport: Codable {
     var date = Date()
     var duration: TimeInterval = 0
     var yaraHits = 0
@@ -284,6 +336,26 @@ struct ScanReport {
     var hitRate: Double {
         let t = yaraTotal + clamTotal
         return t == 0 ? 0 : Double(yaraCached + clamCached) / Double(t)
+    }
+}
+
+/// 前回のスキャン結果（再起動後も表示するための保存形式）
+struct StoredScan: Codable {
+    var report: ScanReport
+    var detections: [Detection]
+}
+
+enum ScanReportStore {
+    static var fileURL: URL { Storage.baseDir.appendingPathComponent("last-security-scan.json") }
+    static func save(_ v: StoredScan, to url: URL = fileURL) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601
+        if let d = try? e.encode(v) { try? d.write(to: url, options: .atomic) }
+    }
+    static func load(from url: URL = fileURL) -> StoredScan? {
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        return try? dec.decode(StoredScan.self, from: d)
     }
 }
 
@@ -337,6 +409,10 @@ final class SecurityModel {
     var running = false
     var detections: [Detection] = []
     var lastReport: ScanReport? = nil
+
+    init() {
+        if let st = ScanReportStore.load() { lastReport = st.report; detections = st.detections }
+    }
     var message: String? = nil
     var hasScanned = false
     /// 実行中の全体進捗（0...1）・残り時間・エンジン別の内訳
@@ -357,7 +433,7 @@ final class SecurityModel {
     @ObservationIgnored private var meter = ProgressMeter()
     @ObservationIgnored private var bps: [String: Double] = [:]
 
-    func refreshStatus() async { status = await XProtect.status() }
+    func refreshStatus() async { if let st = await XProtect.status(previous: status) { status = st } }
 
     /// スキャン完了まで待つ（スマートケア用）。full=nil なら設定（クイック/フル）に従う
     func scan(state: AppState, full: Bool? = nil) async {
@@ -518,6 +594,7 @@ final class SecurityModel {
         report.hidden = filtered.hidden
         report.duration = Date().timeIntervalSince(t0)
         lastReport = report; hasScanned = true
+        ScanReportStore.save(StoredScan(report: report, detections: filtered.visible))
         let total = filtered.visible.count
         state.lastScanSummary = "セキュリティ: \(total == 0 ? "脅威なし" : "脅威 \(total) 件")（\(report.date.formatted(date: .abbreviated, time: .shortened))）"
         let cache = report.quick ? "クイック（キャッシュ命中 \(Int((report.hitRate * 100).rounded()))%・\(report.yaraCached + report.clamCached) 件省略）" : "フル"
@@ -586,6 +663,8 @@ final class SecurityModel {
         do {
             try SafeTrash.trash(URL(fileURLWithPath: d.path), allowedRoots: [home, URL(fileURLWithPath: "/Applications")])
             detections.removeAll { $0.path == d.path }
+            persistDetections()
+            TrashNotice.post(TrashOutcome(moved: 1, failed: 0, bytes: 0))
         } catch { message = "\(error)" }
     }
 
@@ -594,7 +673,12 @@ final class SecurityModel {
         IgnoreList.add(path: d.path, to: &s.ignoredDetections)
         try? s.save()
         detections.removeAll { $0.path == d.path }
+        persistDetections()
         try? History.append(HistoryEntry(date: Date(), kind: .scan, target: d.path, bytes: 0,
                                          result: "ignored", detail: "\(d.engine.rawValue): \(d.signature)"))
+    }
+
+    private func persistDetections() {
+        if let r = lastReport { ScanReportStore.save(StoredScan(report: r, detections: detections)) }
     }
 }

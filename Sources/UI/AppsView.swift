@@ -21,7 +21,7 @@ struct AppsView: View {
             VStack(spacing: 0) {
                 if let msg = m.message { NoticeText(text: msg) }
                 if !m.hasScanned && !m.scanning {
-                    EmptyStateView(symbol: "command", color: Theme.apps, message: "/Applications と ~/Applications のアプリを調べます。") {
+                    EmptyStateView(symbol: "command", color: Theme.apps, message: "インストールされているアプリと、その関連ファイルを調べます。") {
                         Button("スキャン") { Task { await m.scan() } }.buttonStyle(.primary)
                     }
                 } else if tab == 0 { appsTab(m) } else { leftoversTab(m) }
@@ -82,7 +82,7 @@ struct AppsView: View {
                             VStack(alignment: .leading) {
                                 Text(r.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).lineLimit(1).truncationMode(.middle)
                                 if r.isSystem { Text("管理者権限が必要なため表示のみ（Finder で開いて手動で削除）").font(.caption).foregroundStyle(Theme.secondary) }
-                                else if r.kind == .bundlePrefix { Text("ID の前方一致のみ（既定では未選択。内容を確認してください）").font(.caption).foregroundStyle(Theme.warn) }
+                                else if r.kind == .bundlePrefix { Text("名前が似ているだけの可能性があります（既定では未選択。内容を確認してください）").font(.caption).foregroundStyle(Theme.warn) }
                                 else if r.kind == .nameOnly { Text("名前のみ一致（既定では未選択）").font(.caption).foregroundStyle(Theme.warn) }
                             }
                             Spacer()

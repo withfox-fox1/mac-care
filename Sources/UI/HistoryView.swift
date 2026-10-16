@@ -43,7 +43,7 @@ struct HistoryView: View {
         return HStack(spacing: 10) {
             StatCard(title: "空けた容量（累計）", value: formatBytes(stats.totalFreed), caption: "ゴミ箱を空にした分は含みません", tint: Theme.cleanup)
             StatCard(title: "今月の空けた容量", value: formatBytes(stats.monthFreed), caption: monthLabel, tint: Theme.accentText)
-            StatCard(title: "スキャン回数", value: "\(stats.scanCount) 回", caption: "スマートケア内の検査は 1 回", tint: Theme.security)
+            StatCard(title: "スキャン回数", value: "\(stats.scanCount) 回", tint: Theme.security)
             StatCard(title: "失敗件数", value: "\(stats.failureCount) 件", caption: "一部失敗を含む",
                      tint: stats.failureCount > 0 ? Theme.danger : Theme.secondary)
         }
@@ -107,7 +107,7 @@ struct HistoryView: View {
 private struct StatCard: View {
     let title: String
     let value: String
-    let caption: String
+    var caption: String = ""
     let tint: Color
     var body: some View {
         CardView(padding: 12) {
@@ -115,7 +115,7 @@ private struct StatCard: View {
                 Text(title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.secondary).lineLimit(1)
                 Text(value).font(.system(size: 22, weight: .heavy, design: .rounded)).foregroundStyle(tint)
                     .lineLimit(1).minimumScaleFactor(0.7)
-                Text(caption).font(.system(size: 10.5)).foregroundStyle(Theme.secondary.opacity(0.8)).lineLimit(1).minimumScaleFactor(0.8)
+                if !caption.isEmpty { Text(caption).font(.system(size: 10.5)).foregroundStyle(Theme.secondary.opacity(0.8)).lineLimit(1).minimumScaleFactor(0.8) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

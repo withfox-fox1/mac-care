@@ -6,7 +6,7 @@ struct CleanupView: View {
 
     var body: some View {
         let m = state.cleanup
-        PaneScaffold(item: .cleanup, subtitle: "不要なキャッシュ・ログ・古い node_modules を確認し、ゴミ箱へ移動します。") {
+        PaneScaffold(item: .cleanup, subtitle: "不要なキャッシュ・ログ・古い開発用の一時フォルダを確認し、ゴミ箱へ移動します。") {
             if m.scanning || m.cleaning {
                 ProgressView().controlSize(.small)
                 Text(m.cleaning ? "ゴミ箱へ移動中…" : m.progressText).foregroundStyle(Theme.secondary)
@@ -39,7 +39,7 @@ struct CleanupView: View {
                 FooterBar {
                     Text("選択中: \(m.selectedCount) 件 / \(formatBytes(m.selectedSize))").foregroundStyle(Theme.secondary)
                     Spacer()
-                    Button("選択した項目をゴミ箱へ") {
+                    Button("選択した項目をゴミ箱へ…") {
                         let jobs = m.snapshotSelected()   // 確認時点の内容で固定
                         let msg = CleanupModel.summary(of: jobs, categories: m.categories)
                         Task {
@@ -71,7 +71,7 @@ struct CleanupView: View {
                     Task {
                         await Confirm.destructive(title: "ゴミ箱を空にしますか？",
                                                   message: "この操作は取り消せません。ゴミ箱内の \(formatBytes(size)) が完全に削除されます。",
-                                                  button: "完全に削除", snapshot: size) { _ in
+                                                  button: "完全に削除", snapshot: size, undoable: false) { _ in
                             await m.emptyTrash(settings: Settings.load())
                         }
                     }
