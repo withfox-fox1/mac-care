@@ -183,7 +183,7 @@ struct SectionHeader<Actions: View>: View {
     let title: String
     let subtitle: String
     @ViewBuilder var actions: Actions
-    var body: some View {
+    private var titleBlock: some View {
         HStack(alignment: .center, spacing: 14) {
             IconTile(symbol: symbol, color: color, size: 40)
             VStack(alignment: .leading, spacing: 3) {
@@ -191,8 +191,21 @@ struct SectionHeader<Actions: View>: View {
                 Text(subtitle).font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 12)
-            HStack(spacing: 8) { actions }
+        }
+    }
+
+    /// ボタン類は縮めない（文字が消えるのを防ぐ）。横に収まらない場合は見出しの下の行に置く。
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 14) {
+                titleBlock.frame(minWidth: 300, idealWidth: 300, maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 12)
+                HStack(spacing: 8) { actions }.fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                titleBlock
+                HStack(spacing: 8) { Spacer(minLength: 0); actions }.fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
