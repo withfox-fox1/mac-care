@@ -34,9 +34,9 @@ struct ScanProgressBlock: View {
                 Text(etaText).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.secondary)
             }
             ScanProgressBar(fraction: fraction)
-            Text(stepText).font(.system(size: 11.5)).foregroundStyle(Theme.secondary).lineLimit(1)
+            Text(stepText).font(.system(size: 11.5)).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
             if !detailText.isEmpty {
-                Text(detailText).font(.system(size: 11)).foregroundStyle(Theme.secondary.opacity(0.85)).lineLimit(1)
+                Text(detailText).font(.system(size: 11)).foregroundStyle(Theme.secondary.opacity(0.85)).lineLimit(1).truncationMode(.middle)
             }
         }
         .frame(width: width, alignment: .leading)
@@ -57,6 +57,8 @@ struct NoticeBanner: View {
             Button("閉じる", action: dismiss).buttonStyle(.secondary)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
+        // 下の内容が透けないよう、不透明の下地の上に色を重ねる
+        .background(Theme.bannerBase, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .background((isError ? Theme.warn : Theme.ok).opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder((isError ? Theme.warn : Theme.ok).opacity(0.35), lineWidth: 1))
     }

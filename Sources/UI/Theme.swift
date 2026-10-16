@@ -33,6 +33,8 @@ enum Theme {
     static let blue = Color(hex: "3b82f6")
     static let cardFill = Color.white.opacity(0.06)
     static let cardBorder = Color.white.opacity(0.10)
+    /// お知らせバナーの不透明な下地（背景グラデーションに近い色）
+    static let bannerBase = Color(hex: "0b2a3d")
     static let rowAlt = Color.white.opacity(0.035)
     static let accentGradient = LinearGradient(colors: [teal, blue], startPoint: .leading, endPoint: .trailing)
     static let ringGradient = LinearGradient(colors: [accentText, info], startPoint: .leading, endPoint: .trailing)
@@ -194,7 +196,10 @@ struct SectionHeader<Actions: View>: View {
         }
     }
 
-    /// ボタン類は縮めない（文字が消えるのを防ぐ）。横に収まらない場合は見出しの下の行に置く。
+    /// ボタン類は縮めない（文字が消えるのを防ぐ）。候補は次の順:
+    /// 1. 見出しの右に1行 2. 見出しの下に1行 3. 見出しの下で折り返し（FlowLayout）
+    /// 注意: actions は候補ごとに生成される（ViewThatFits は全候補を測定する）。
+    /// actions 内に onAppear / task など副作用のある処理や @State を持つビューを置かないこと。
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: 14) {
@@ -204,8 +209,42 @@ struct SectionHeader<Actions: View>: View {
             }
             VStack(alignment: .leading, spacing: 12) {
                 titleBlock
-                HStack(spacing: 8) { Spacer(minLength: 0); actions }.fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) { actions }.fixedSize().frame(maxWidth: .infinity, alignment: .trailing)
             }
+            VStack(alignment: .leading, spacing: 12) {
+                titleBlock
+                FlowLayout(spacing: 8, lineSpacing: 8) { actions }
+            }
+        }
+    }
+}
+
+/// 子ビューを左から右へ並べ、幅を超えたら次の行へ折り返すレイアウト（各子ビューは理想サイズ）
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 8
+
+    private func rows(_ subviews: Subviews, width: CGFloat) -> (frames: [CGRect], size: CGSize) {
+        var frames: [CGRect] = []
+        var x: CGFloat = 0, y: CGFloat = 0, lineH: CGFloat = 0, maxW: CGFloat = 0
+        for sv in subviews {
+            let s = sv.sizeThatFits(.unspecified)
+            if x > 0 && x + s.width > width { x = 0; y += lineH + lineSpacing; lineH = 0 }
+            frames.append(CGRect(x: x, y: y, width: s.width, height: s.height))
+            x += s.width + spacing; lineH = max(lineH, s.height); maxW = max(maxW, x - spacing)
+        }
+        return (frames, CGSize(width: maxW, height: y + lineH))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        rows(subviews, width: proposal.width ?? .infinity).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let r = rows(subviews, width: bounds.width)
+        for (sv, f) in zip(subviews, r.frames) {
+            sv.place(at: CGPoint(x: bounds.minX + f.minX, y: bounds.minY + f.minY), anchor: .topLeading,
+                     proposal: ProposedViewSize(width: f.width, height: f.height))
         }
     }
 }

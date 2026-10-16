@@ -25,13 +25,13 @@ struct SecurityView: View {
             if m.running {
                 ScanProgressBlock(fraction: m.fraction, etaText: m.etaText,
                                   stepText: m.step == .scanning ? "\(m.runningFull ? "フル" : "クイック")スキャン中" : m.step.rawValue,
-                                  detailText: m.detail, width: 230)
+                                  detailText: m.detail, width: 270)
                 Button("キャンセル") { m.cancel() }.buttonStyle(.secondary)
             } else {
                 Picker("方式", selection: $st.settings.quickScan) {
                     Text("クイック（変更分のみ）").tag(true)
                     Text("フル（すべて）").tag(false)
-                }.pickerStyle(.segmented).labelsHidden().frame(width: 270)
+                }.pickerStyle(.segmented).labelsHidden().fixedSize()
                 Button(m.hasScanned ? "再スキャン" : "スキャン開始") { m.start(state: state) }.buttonStyle(.primary)
             }
         } content: {

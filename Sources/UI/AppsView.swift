@@ -40,7 +40,7 @@ struct AppsView: View {
         VStack(spacing: 0) {
             Table(m.apps, selection: $selectedApp) {
                 TableColumn("名前") { a in
-                    HStack { Text(a.name); if m.isRunning(a) { StatusBadge(kind: .warn, "実行中") } }
+                    HStack { Text(a.name).lineLimit(1).truncationMode(.middle); if m.isRunning(a) { StatusBadge(kind: .warn, "実行中").fixedSize() } }
                 }
                 TableColumn("バージョン") { Text($0.version) }.width(90)
                 TableColumn("サイズ") { Text($0.size == 0 ? "計算中…" : formatBytes($0.size)).monospacedDigit() }.width(80)

@@ -42,28 +42,43 @@ struct DashboardView: View {
 
     private func top(_ m: SmartCareModel) -> some View {
         let score = state.healthScore
-        return HStack(alignment: .center, spacing: 22) {
-            ScoreRing(score: score, tint: ringTint)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(HealthScore.headline(score)).font(.system(size: 26, weight: .heavy))
-                Text(summary).font(.system(size: 13)).foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            VStack(alignment: .trailing, spacing: 8) {
+        let heading = VStack(alignment: .leading, spacing: 6) {
+            Text(HealthScore.headline(score)).font(.system(size: 26, weight: .heavy))
+            Text(summary).font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        // 右側（実行ボタン／進捗）。縮めず、収まらないときは見出しの下へ回す
+        let trailing = { (align: HorizontalAlignment) in
+            VStack(alignment: align, spacing: 8) {
                 if m.running {
                     HStack(alignment: .bottom, spacing: 12) {
                         ScanProgressBlock(fraction: m.progress, etaText: m.etaText, stepText: m.statusText,
                                           detailText: m.activeSteps.contains(.security) ? state.security.detail : "", width: 250)
-                        Button("中止") { m.cancel(state: state) }.buttonStyle(.secondary)
+                        Button("中止") { m.cancel(state: state) }.buttonStyle(.secondary).fixedSize()
                     }
                 } else {
                     Button { Task { await m.run(state: state) } } label: {
                         Label("スマートケアを実行", systemImage: "arrow.triangle.2.circlepath")
-                    }.buttonStyle(.primary)
+                    }.buttonStyle(.primary).fixedSize()
                 }
                 Text(meta(m)).font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
                 Text(FullScanLabel.text(state.security.lastFullAt)).font(.system(size: 11)).foregroundStyle(Theme.secondary.opacity(0.85))
+            }
+            .fixedSize()
+        }
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 22) {
+                ScoreRing(score: score, tint: ringTint)
+                heading
+                Spacer(minLength: 12)
+                trailing(.trailing)
+            }
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 22) {
+                    ScoreRing(score: score, tint: ringTint)
+                    heading
+                }
+                trailing(.leading)
             }
         }
     }
@@ -282,10 +297,17 @@ struct StatusCard<Extra: View>: View {
                     Text(value ?? "—").font(.system(size: 26, weight: .heavy)).lineLimit(1).minimumScaleFactor(0.7).padding(.top, 10)
                     Text(detail ?? "スマートケアで表示されます").font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
                         .lineLimit(2, reservesSpace: true).padding(.top, 4)
-                    HStack {
-                        StatusBadge(kind: badge.0, badge.1)
-                        Spacer(minLength: 4)
-                        extra
+                    // バッジとボタンは縮めない。横に収まらないときは縦に並べる
+                    ViewThatFits(in: .horizontal) {
+                        HStack {
+                            StatusBadge(kind: badge.0, badge.1).fixedSize()
+                            Spacer(minLength: 4)
+                            extra.fixedSize()
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            StatusBadge(kind: badge.0, badge.1).fixedSize()
+                            extra.fixedSize()
+                        }
                     }.padding(.top, 10)
                 }
             }

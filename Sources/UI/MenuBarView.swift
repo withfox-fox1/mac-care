@@ -86,8 +86,12 @@ struct MenuBarView: View {
                     else { Text(HealthScore.word(score)).foregroundStyle(Theme.ringGradient) }
                 }
                 .font(.system(size: 20, weight: .bold))
-                Text("\(state.metrics.modelName) ・ 最終チェック \(state.smartCare.result.map { ShortDate.format($0.date) } ?? "なし")")
-                    .font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1)
+                HStack(spacing: 0) {
+                    Text(state.metrics.modelName).lineLimit(1).truncationMode(.tail)
+                    Text(" ・ 最終チェック \(state.smartCare.result.map { ShortDate.format($0.date) } ?? "なし")")
+                        .lineLimit(1).fixedSize()
+                }
+                .font(.system(size: 12)).foregroundStyle(Theme.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -149,12 +153,12 @@ struct MenuBarView: View {
         }
     }
 
-    private func title(_ symbol: String, _ color: Color, _ t: String, _ sub: String) -> some View {
+    private func title(_ symbol: String, _ color: Color, _ t: String, _ sub: String, subLines: Int = 1) -> some View {
         HStack(spacing: 10) {
             IconTile(symbol: symbol, color: color, size: 30, filled: false)
             VStack(alignment: .leading, spacing: 2) {
                 Text(t).font(.system(size: 13.5, weight: .bold)).lineLimit(1)
-                Text(sub).font(.system(size: 11.5)).foregroundStyle(Theme.secondary).lineLimit(1).minimumScaleFactor(0.85)
+                Text(sub).font(.system(size: 11.5)).foregroundStyle(Theme.secondary).lineLimit(subLines).minimumScaleFactor(0.75).monospacedDigit()
             }
         }
     }
@@ -171,6 +175,15 @@ struct MenuBarView: View {
 
     private func note(_ t: String) -> some View {
         Text(t).font(.system(size: 11.5)).foregroundStyle(Theme.secondary).lineLimit(1).minimumScaleFactor(0.8).padding(.top, 8)
+    }
+
+    /// 「最大: 名前 値」。名前だけを中央省略し、値は常に表示する
+    private func topNote(_ name: String, _ value: String) -> some View {
+        HStack(spacing: 4) {
+            Text("最大: \(name)").lineLimit(1).truncationMode(.middle)
+            Text(value).lineLimit(1).fixedSize()
+        }
+        .font(.system(size: 11.5)).foregroundStyle(Theme.secondary).padding(.top, 8)
     }
 
     private func linkText(_ t: String) -> some View {
@@ -200,7 +213,7 @@ struct MenuBarView: View {
             VStack(alignment: .leading, spacing: 0) {
                 title("memorychip.fill", Color(hex: "c084fc"), "メモリ", p.map { "プレッシャー \($0)%" } ?? "取得中…")
                 bar(Double(p ?? 0) / 100, colors)
-                note(mx.topMemory.map { "最大: \($0.name) \(formatBytes($0.memoryBytes))" } ?? " ")
+                if let t = mx.topMemory { topNote(t.name, formatBytes(t.memoryBytes)) } else { note(" ") }
             }
         }
     }
@@ -210,7 +223,7 @@ struct MenuBarView: View {
             VStack(alignment: .leading, spacing: 0) {
                 title("bolt.fill", Theme.warn, "CPU", mx.cpuLoad.map { "負荷 \(Int($0.rounded()))%" } ?? "取得中…")
                 Sparkline(values: mx.cpuHistory).frame(height: 26).padding(.top, 8)
-                note(mx.topCPU.map { "最大: \($0.name) \(Int($0.cpu.rounded()))%" } ?? " ")
+                if let t = mx.topCPU { topNote(t.name, "\(Int(t.cpu.rounded()))%") } else { note(" ") }
             }
         }
     }
@@ -219,7 +232,7 @@ struct MenuBarView: View {
         let b = mx.battery
         let sub: String = {
             guard let b else { return "取得中…" }
-            if b.isCharging { return b.minutes.map { "充電中 ・ 満充電まで \(MetricsMath.minutes($0))" } ?? "充電中" }
+            if b.isCharging { return b.minutes.map { "充電中・あと \(MetricsMath.minutes($0))" } ?? "充電中" }
             if b.onAC { return "電源に接続中" }
             return b.minutes.map { "残り \(MetricsMath.minutes($0))" } ?? "残り時間を計算中"
         }()
@@ -248,14 +261,14 @@ struct MenuBarView: View {
             VStack(alignment: .leading, spacing: 0) {
                 title(mx.wifi.isWiFi ? "wifi" : "cable.connector", Color(hex: "67e8f9"),
                       mx.wifi.isWiFi ? (mx.wifi.ssid ?? "Wi-Fi") : "有線",
-                      "↑ \(MetricsMath.rate(mx.netUp))　↓ \(MetricsMath.rate(mx.netDown))")
+                      "↑ \(MetricsMath.rate(mx.netUp))\n↓ \(MetricsMath.rate(mx.netDown))", subLines: 2)
                 if mx.speedTesting {
                     HStack(spacing: 6) { ProgressView().controlSize(.small); Text("測定中…").font(.system(size: 12)).foregroundStyle(Theme.secondary) }
                         .frame(maxWidth: .infinity, alignment: .trailing).padding(.top, 8)
                 } else {
                     VStack(alignment: .trailing, spacing: 2) {
                         if let r = mx.speedResult {
-                            Text("↓ \(Int(r.down.rounded())) Mbps　↑ \(Int(r.up.rounded())) Mbps").font(.system(size: 11.5, weight: .semibold))
+                            Text("↓\(Int(r.down.rounded())) ↑\(Int(r.up.rounded())) Mbps").font(.system(size: 11.5, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
                         } else if mx.speedFailed {
                             Text("測定できませんでした").font(.system(size: 11.5)).foregroundStyle(Theme.warn)
                         }
@@ -337,7 +350,7 @@ struct MenuBarView: View {
         let sc = state.smartCare
         return VStack(spacing: 12) {
             ThemedDivider()
-            HStack(spacing: 10) {
+            HStack(spacing: 6) {
                 Menu {
                     Button("設定を開く") { openMain("settings") }
                     Divider()
@@ -353,13 +366,14 @@ struct MenuBarView: View {
                 Spacer(minLength: 0)
                 if sc.running {
                     HStack(spacing: 6) { ProgressView().controlSize(.small); Text(sc.statusText).font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1) }
-                    Button("中止") { sc.cancel(state: state) }.buttonStyle(.secondary)
+                        .layoutPriority(-1)
+                    Button("中止") { sc.cancel(state: state) }.buttonStyle(.secondary).fixedSize()
                 } else {
-                    Button { runSmartCare() } label: { Text("スマートケアを実行").padding(.horizontal, 8) }
-                        .buttonStyle(PrimaryButtonStyle(compact: false))
+                    Button { runSmartCare() } label: { Text("スマートケアを実行") }
+                        .buttonStyle(PrimaryButtonStyle(compact: false)).fixedSize()
                 }
                 Spacer(minLength: 0)
-                Button("MacCare を開く") { openMain() }.buttonStyle(.secondary)
+                Button("MacCare を開く") { openMain() }.buttonStyle(.secondary).fixedSize()
             }
         }
         .padding(.top, 4)

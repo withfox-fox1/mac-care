@@ -10,6 +10,7 @@ struct CleanupView: View {
             if m.scanning || m.cleaning {
                 ProgressView().controlSize(.small)
                 Text(m.cleaning ? "ゴミ箱へ移動中…" : m.progressText).foregroundStyle(Theme.secondary)
+                    .lineLimit(1).truncationMode(.middle).frame(width: 220, alignment: .leading)
             }
             if m.excludedCount > 0 { StatusBadge(kind: .info, "除外 \(m.excludedCount) 件") }
             if let f = m.lastFreed { StatusBadge(kind: .ok, "解放: \(formatBytes(f))") }

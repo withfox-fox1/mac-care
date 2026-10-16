@@ -68,13 +68,14 @@ struct MainWindow: View {
             ThemedBackground()
             HStack(spacing: 0) {
                 sidebar
-                detail.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(alignment: .top) {
-                        if let n = state.update.notice {
-                            NoticeBanner(text: n.text, isError: n.isError) { state.update.notice = nil }
-                                .padding(.horizontal, 30).padding(.top, 12)
-                        }
+                // お知らせは詳細領域の上に差し込み、下の内容を押し下げる（ボタンを覆わない）
+                VStack(spacing: 0) {
+                    if let n = state.update.notice {
+                        NoticeBanner(text: n.text, isError: n.isError) { state.update.notice = nil }
+                            .padding(.horizontal, 30).padding(.top, 12)
                     }
+                    detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .oceanScheme()
@@ -198,6 +199,14 @@ struct WindowConfigurator: NSViewRepresentable {
             w.backgroundColor = NSColor(srgbRed: 0.024, green: 0.075, blue: 0.122, alpha: 1)
             // タイトルの変更で戻されないよう、変更のたびに隠し直す
             obs = w.observe(\.title) { w, _ in w.titleVisibility = .hidden }
+            // 検証用: `--window-size <幅>x<高さ>` で表示サイズを指定する（レイアウト確認の撮影用）
+            let args = CommandLine.arguments
+            if let i = args.firstIndex(of: "--window-size"), i + 1 < args.count {
+                let p = args[i + 1].split(separator: "x").compactMap { Double($0) }
+                if p.count == 2 {
+                    DispatchQueue.main.async { w.setContentSize(NSSize(width: p[0], height: p[1])) }
+                }
+            }
         }
     }
     func makeNSView(context: Context) -> NSView { V() }

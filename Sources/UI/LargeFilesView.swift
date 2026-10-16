@@ -19,7 +19,7 @@ struct LargeFilesView: View {
             VStack(spacing: 0) {
                 if m.hasScanned || m.message != nil {
                     Text([m.info, m.message ?? ""].filter { !$0.isEmpty }.joined(separator: "　"))
-                        .font(.caption).foregroundStyle(Theme.secondary).padding(.vertical, 6).frame(maxWidth: .infinity)
+                        .font(.caption).foregroundStyle(Theme.secondary).padding(.horizontal, 14).padding(.vertical, 6).lineLimit(2).frame(maxWidth: .infinity)
                 }
                 if !m.hasScanned && !m.scanning {
                     EmptyStateView(symbol: "externaldrive.fill", color: Theme.largeFiles, message: "閾値以上の大きなファイルを探して一覧にします。") {

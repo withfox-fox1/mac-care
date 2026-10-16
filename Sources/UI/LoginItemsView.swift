@@ -17,7 +17,7 @@ struct LoginItemsView: View {
             VStack(spacing: 0) {
                 if let msg = m.message { NoticeText(text: msg) }
                 if let d = m.diff, !d.removed.isEmpty {
-                    Text("前回から削除された項目: \(d.removed.joined(separator: ", "))").font(.caption).foregroundStyle(Theme.secondary).padding(.vertical, 4)
+                    Text("前回から削除された項目: \(d.removed.joined(separator: ", "))").font(.caption).foregroundStyle(Theme.secondary).padding(.horizontal, 14).padding(.vertical, 4).lineLimit(2)
                 }
                 if !m.hasScanned && !m.scanning {
                     EmptyStateView(symbol: "power", color: Theme.loginItems, message: "ログイン項目をスキャンします。\nスキャンごとにスナップショットを保存し、新しい項目を強調表示・通知します。") {
@@ -28,7 +28,7 @@ struct LoginItemsView: View {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack {
-                                    Text(it.label).bold()
+                                    Text(it.label).bold().lineLimit(1).truncationMode(.middle)
                                     if it.change == .new { badge("新規", Theme.danger) }
                                     if it.change == .changed { badge("変更", Theme.warn) }
                                     badge(it.domain == .user ? "ユーザー" : "システム", Theme.secondary)
@@ -61,6 +61,6 @@ struct LoginItemsView: View {
 
     private func badge(_ t: String, _ c: Color) -> some View {
         Text(t).font(.caption2).padding(.horizontal, 6).padding(.vertical, 1)
-            .background(c.opacity(0.2), in: Capsule()).foregroundStyle(c)
+            .background(c.opacity(0.2), in: Capsule()).foregroundStyle(c).fixedSize()
     }
 }
