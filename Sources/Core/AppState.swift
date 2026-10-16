@@ -14,6 +14,7 @@ final class AppState {
     let cleanup = CleanupModel()
     let largeFiles = LargeFilesModel()
     let compressQueue = CompressQueue()
+    let compressCandidates = CompressCandidatesModel()
     let security = SecurityModel()
     let apps = AppsModel()
     let loginItems = LoginItemsModel()

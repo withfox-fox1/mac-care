@@ -843,6 +843,44 @@ func historyTests() {
 }
 historyTests()
 
+func compressCandidateTests() {
+    let M: Int64 = 1_000_000
+    // 100 秒・200MB → 16 Mbps、上限 2.5Mbps で 31.25MB
+    check(CompressEstimator.bitrate(size: 200 * M, duration: 100) == 16_000_000, "圧縮候補: ビットレート = size*8/duration")
+    check(CompressEstimator.estimatedOutput(size: 200 * M, duration: 100) == 31_250_000, "圧縮候補: 推定出力は 2.5Mbps で頭打ち")
+    check(CompressEstimator.estimatedSaving(size: 200 * M, duration: 100) == 168_750_000, "圧縮候補: 推定削減量 = size - 推定出力")
+    // 2Mbps（上限未満）→ 推定出力は元サイズ相当で、削減量 0
+    check(CompressEstimator.estimatedOutput(size: 25 * M, duration: 100) == 25 * M, "圧縮候補: 上限未満は入力ビットレートで見積もる")
+    check(CompressEstimator.estimatedSaving(size: 25 * M, duration: 100) == 0, "圧縮候補: 削減量は 0 未満にならない（低ビットレート）")
+    check(CompressEstimator.estimatedSaving(size: 100 * M, duration: 1) ?? -1 >= 0 && CompressEstimator.estimatedSaving(size: 1, duration: 1_000_000) == 0, "圧縮候補: 端の値でも削減量が負にならない")
+    // duration 不明
+    check(CompressEstimator.bitrate(size: 200 * M, duration: nil) == nil && CompressEstimator.bitrate(size: 200 * M, duration: 0) == nil, "圧縮候補: duration 不明/0 はビットレート nil")
+    check(CompressEstimator.estimatedOutput(size: 200 * M, duration: nil) == nil && CompressEstimator.estimatedSaving(size: 200 * M, duration: nil) == nil, "圧縮候補: duration 不明は見込み nil")
+    check(!CompressEstimator.defaultSelected(size: 200 * M, duration: nil) && !CompressEstimator.isLowBitrate(size: 200 * M, duration: nil), "圧縮候補: duration 不明は既定チェックなし")
+    // 低ビットレート 4Mbps の境界（100秒で 50MB = 4Mbps ちょうど）
+    check(CompressEstimator.isLowBitrate(size: 50 * M - 1, duration: 100) && !CompressEstimator.isLowBitrate(size: 50 * M, duration: 100), "圧縮候補: 4Mbps 未満が低ビットレート（境界）")
+    check(!CompressEstimator.defaultSelected(size: 40 * M, duration: 100) && CompressEstimator.defaultSelected(size: 50 * M, duration: 100), "圧縮候補: 既定チェックは 4Mbps 以上のみ")
+    // キャッシュ判定
+    func u(_ p: String) -> URL { URL(fileURLWithPath: p) }
+    check(CompressEstimator.isCachePath(u("/Users/a/Movies/CapCut/User Data/Cache/SmartCrop/x.mp4")), "圧縮候補: Cache 配下はキャッシュ")
+    check(CompressEstimator.isCachePath(u("/Users/a/x/CACHES/y/z.mov")) && CompressEstimator.isCachePath(u("/Users/a/x/cache/z.mov")), "圧縮候補: caches/大文字小文字を無視")
+    check(!CompressEstimator.isCachePath(u("/Users/a/Movies/Cachet/z.mov")) && !CompressEstimator.isCachePath(u("/Users/a/Movies/z.mov")), "圧縮候補: 構成要素が一致しないものは対象")
+    // 100MB の境界（拡張子・サイズ）
+    func lf(_ path: String, _ size: Int64) -> LargeFile { LargeFile(url: u(path), size: size, lastUsed: .distantPast, kind: "") }
+    check(CompressEstimator.isPreCandidate(lf("/Users/a/Movies/a.mp4", 100_000_000)), "圧縮候補: 100MB ちょうどは対象")
+    check(!CompressEstimator.isPreCandidate(lf("/Users/a/Movies/a.mp4", 99_999_999)), "圧縮候補: 100MB 未満は対象外")
+    check(!CompressEstimator.isPreCandidate(lf("/Users/a/Movies/a.zip", 500_000_000)) && CompressEstimator.isPreCandidate(lf("/Users/a/Movies/a.MOV", 500_000_000)), "圧縮候補: 動画拡張子のみ（大文字可）")
+    check(!CompressEstimator.isPreCandidate(lf("/Users/a/Movies/Cache/a.mp4", 500_000_000)), "圧縮候補: キャッシュパスは対象外")
+    // キュー内の除外と合計
+    let c1 = CompressCandidate(url: u("/v/a.mp4"), size: 200 * M, duration: 100)
+    let c2 = CompressCandidate(url: u("/v/b.mp4"), size: 300 * M, duration: nil)
+    check(CompressEstimator.visible([c1, c2], excludingPaths: ["/v/a.mp4"]).map(\.id) == ["/v/b.mp4"], "圧縮候補: キュー内のファイルは候補から外れる")
+    check(CompressEstimator.totalSaving([c1, c2]) == 168_750_000 && CompressEstimator.totalSize([c1, c2]) == 500 * M, "圧縮候補: 合計（不明は削減 0 として加算）")
+    check(c1.defaultSelected && !c2.defaultSelected, "圧縮候補: 構造体の既定チェック")
+    check(CompressEstimator.bitrateText(2_300_000) == "2.3 Mbps" && CompressEstimator.bitrateText(nil) == "—", "圧縮候補: ビットレート表示")
+}
+compressCandidateTests()
+
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")
 exit(failures == 0 ? 0 : 1)
