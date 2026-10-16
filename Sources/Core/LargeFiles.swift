@@ -64,6 +64,7 @@ final class LargeFilesModel {
     var files: [LargeFile] = []
     var scanning = false
     var hasScanned = false
+    var lastScannedAt: Date? = nil
     var info = ""
     var message: String? = nil
 
@@ -91,7 +92,7 @@ final class LargeFilesModel {
             marked[i].isHEVC = await VideoCodec.isHEVC(marked[i].url)
         }
         files = marked
-        hasScanned = true; scanning = false
+        hasScanned = true; lastScannedAt = Date(); scanning = false
         info = "\(r.count) 件 / 合計 \(formatBytes(r.reduce(0) { $0 + $1.size })) （\(String(format: "%.1f", Date().timeIntervalSince(start))) 秒）"
     }
 

@@ -42,8 +42,10 @@ struct DashboardView: View {
 
     private func top(_ m: SmartCareModel) -> some View {
         let score = state.healthScore
+        let ran = state.hasHealthScore
+        let ringScore: Int? = ran ? score : nil
         let heading = VStack(alignment: .leading, spacing: 6) {
-            Text(HealthScore.headline(score)).font(.system(size: 26, weight: .heavy))
+            Text(ran ? HealthScore.headline(score) : "まずはスマートケアを実行しましょう").font(.system(size: 26, weight: .heavy))
             Text(summary).font(.system(size: 13)).foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -57,25 +59,27 @@ struct DashboardView: View {
                         Button("中止") { m.cancel(state: state) }.buttonStyle(.secondary).fixedSize()
                     }
                 } else {
-                    Button { Task { await m.run(state: state) } } label: {
+                    let run = Button { Task { await m.run(state: state) } } label: {
                         Label("スマートケアを実行", systemImage: "arrow.triangle.2.circlepath")
-                    }.buttonStyle(.primary).fixedSize()
+                    }
+                    // 未実行のときは大きく目立たせる（実行後は通常サイズ）
+                    if ran { run.buttonStyle(.primary).fixedSize() } else { run.buttonStyle(.primaryLarge).fixedSize() }
                 }
                 Text(meta(m)).font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
-                Text(FullScanLabel.text(state.security.lastFullAt)).font(.system(size: 11)).foregroundStyle(Theme.secondary.opacity(0.85))
+                Text(FullScanLabel.text(state.security.lastFullAt)).font(.system(size: 11)).foregroundStyle(Theme.secondary)
             }
             .fixedSize()
         }
         return ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: 22) {
-                ScoreRing(score: score, tint: ringTint)
+                ScoreRing(score: ringScore, tint: ran ? ringTint : nil)
                 heading
                 Spacer(minLength: 12)
                 trailing(.trailing)
             }
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .center, spacing: 22) {
-                    ScoreRing(score: score, tint: ringTint)
+                    ScoreRing(score: ringScore, tint: ran ? ringTint : nil)
                     heading
                 }
                 trailing(.leading)
@@ -116,6 +120,7 @@ struct DashboardView: View {
         let login = (r?.newLoginItems ?? 0) + (r?.changedLoginItems ?? 0)
         let videos = state.largeFiles.files.filter(\.needsCompression).count
         let junk = r?.junkBytes ?? 0
+        let notRun = r == nil && !m.running
         return HStack(alignment: .top, spacing: 12) {
             StatusCard(title: "不要データ", symbol: "sparkles", color: Theme.cleanup, step: stepState(.cleanup, m),
                        value: r.map { formatBytes($0.junkBytes) },
@@ -123,14 +128,15 @@ struct DashboardView: View {
                        badge: r == nil ? (.info, "未実行") : junk < 1_000_000_000 ? (.ok, "きれい") : (.warn, "掃除できます"),
                        tap: { go("cleanup") }) {
                 if let r, r.safeJunkBytes > 0 {
-                    Button("掃除…") { trashSafe(r) }.buttonStyle(.secondary)
+                    Button("すぐ掃除（\(formatBytes(r.safeJunkBytes))）…") { trashSafe(r) }.buttonStyle(.secondary)
                         .disabled(state.cleanup.cleaning || m.running)
+                        .help(m.running ? "スマートケアの実行中は掃除できません" : state.cleanup.cleaning ? "掃除中です" : "")
                 }
             }
             StatusCard(title: "脅威", symbol: "checkmark.shield.fill", color: Theme.security, step: stepState(.security, m),
                        stepDetail: m.running ? state.security.detail : nil,
                        value: r.map { "\($0.threats) 件" },
-                       detail: r.map { "最終確認 \($0.date.formatted(date: .abbreviated, time: .shortened))" },
+                       detail: r.map { "最終確認 \(ShortDate.format($0.date))" },
                        badge: r == nil ? (.info, "未実行") : r!.threats == 0 ? (.ok, "保護中") : (.danger, "要対応"),
                        tap: { go("security") }) { EmptyView() }
             StatusCard(title: "ログイン項目", symbol: "power", color: Theme.loginItems, step: stepState(.loginItems, m),
@@ -145,6 +151,7 @@ struct DashboardView: View {
                        tap: { go("largeFiles") }) { EmptyView() }
         }
         .fixedSize(horizontal: false, vertical: true)
+        .opacity(notRun ? 0.55 : 1)   // 未実行のカードは薄く表示する
     }
 
     /// 不要データの掃除（Confirm.destructive 経由。確認時点の内容で固定）
@@ -182,38 +189,51 @@ struct DashboardView: View {
         }
     }
 
+    /// 履歴画面と同じグループ化で、同種の操作をまとめた直近 5 件
+    private var recentRows: [HistoryRow] {
+        // state.history は新しい順。グループ化は記録順（古い順）で受け取るため戻す。直近分だけ使う
+        Array(HistoryGrouping.rows(from: Array(state.history.prefix(200).reversed())).prefix(5))
+    }
+
     private var recentCard: some View {
-        let items = Array(state.history.prefix(5))
+        let items = recentRows
         return CardView(padding: 16) {
             VStack(alignment: .leading, spacing: 0) {
                 Text("最近の操作").font(.system(size: 13, weight: .heavy)).foregroundStyle(Color(hex: "dff3f6")).padding(.bottom, 6)
-                ForEach(Array(items.enumerated()), id: \.element.id) { i, e in
-                    logRow(label(e), ShortDate.format(e.date), first: i == 0)
+                ForEach(Array(items.enumerated()), id: \.element.id) { i, row in
+                    logRow(row, first: i == 0)
                 }
-                if items.isEmpty { logRow("履歴はまだありません", "", first: true) }
+                if items.isEmpty { simpleRow("履歴はまだありません", "", first: true) }
                 if let d = state.disk {
-                    logRow("空き容量", "\(formatBytes(d.available)) / \(formatBytes(d.total))", first: items.isEmpty)
+                    simpleRow("空き容量", "\(formatBytes(d.available)) / \(formatBytes(d.total))", first: items.isEmpty)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
-    private func label(_ e: HistoryEntry) -> String {
-        let size = e.bytes > 0 ? "・\(formatBytes(e.bytes))" : ""
-        switch e.kind {
-        case .cleanup: return "クリーンアップ" + size
-        case .trash: return "ゴミ箱へ・" + (e.target as NSString).lastPathComponent
-        case .compress: return "動画圧縮・" + (e.target as NSString).lastPathComponent
-        case .uninstall: return "アンインストール・" + e.target
-        case .loginItem: return "ログイン項目・" + e.target
-        case .scan:
-            if e.target.hasPrefix("セキュリティスキャン") { return "セキュリティスキャン・" + (e.result == "clean" ? "脅威 0件" : "脅威あり") }
-            return e.target
+    /// 「動画を圧縮・−1.84 GB」「14 項目をゴミ箱へ」の形。ファイル名は 2 行目に中央省略で出す
+    private func logRow(_ row: HistoryRow, first: Bool) -> some View {
+        let freed = HistoryFormat.freed(row.freedBytes).map { "・" + $0 } ?? ""
+        return VStack(spacing: 0) {
+            if !first { ThemedDivider() }
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.title + freed).font(.system(size: 12)).foregroundStyle(Color(hex: "cfe6ec"))
+                        .lineLimit(1).truncationMode(.middle)
+                    if let s = row.subtitle {
+                        Text(s).font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 8)
+                Text(ShortDate.format(row.date)).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    .lineLimit(1).fixedSize().layoutPriority(1)
+            }
+            .padding(.vertical, 7)
         }
     }
 
-    private func logRow(_ l: String, _ r: String, first: Bool) -> some View {
+    private func simpleRow(_ l: String, _ r: String, first: Bool) -> some View {
         VStack(spacing: 0) {
             if !first { ThemedDivider() }
             HStack(spacing: 8) {
@@ -276,13 +296,23 @@ struct StatusCard<Extra: View>: View {
     let badge: (BadgeKind, String)
     let tap: () -> Void
     @ViewBuilder var extra: Extra
+    @State private var hovering = false
+
+    private var accessibilityText: String {
+        if let step { return step == .waiting ? "待機中" : step == .checking ? "チェック中" : "完了" }
+        return [value ?? "未実行", detail ?? "", badge.1].filter { !$0.isEmpty }.joined(separator: "、")
+    }
 
     var body: some View {
         CardView {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     IconTile(symbol: symbol, color: color, size: 24, filled: false)
-                    Text(title).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color(hex: "cfe6ec")).lineLimit(1)
+                    Text(title).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color(hex: "cfe6ec")).lineLimit(1).minimumScaleFactor(0.8)
+                    Spacer(minLength: 2)
+                    // カード全体を押せることを示す
+                    Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(hovering ? Theme.accentText : Theme.secondary).accessibilityHidden(true)
                 }
                 if let step {
                     HStack(spacing: 8) {
@@ -314,10 +344,14 @@ struct StatusCard<Extra: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .strokeBorder(Theme.teal.opacity(hovering ? 0.8 : 0), lineWidth: 1.5).allowsHitTesting(false))
         .contentShape(RoundedRectangle(cornerRadius: 16))
+        .onHover { hovering = $0 }
         .onTapGesture(perform: tap)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(title)
+        .accessibilityValue(accessibilityText)
     }
 }

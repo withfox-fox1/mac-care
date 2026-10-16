@@ -12,18 +12,24 @@ struct AppsView: View {
     var body: some View {
         let m = state.apps
         PaneScaffold(item: .apps, subtitle: "アプリと関連ファイルをまとめてゴミ箱へ移動します。Apple 製・実行中のアプリは対象外です。") {
-            if m.scanning { ProgressView().controlSize(.small) }
             Picker("", selection: $tab) { Text("アプリ").tag(0); Text("残骸").tag(1) }
                 .pickerStyle(.segmented).frame(width: 140).labelsHidden()
             Button(m.hasScanned ? "再スキャン" : "スキャン") { Task { await m.scan() } }
-                .buttonStyle(.primary).disabled(m.scanning)
+                .prominentButton(!m.hasScanned).fixedSize().disabled(m.scanning)
+                .help(m.scanning ? "スキャン中です" : "")
         } content: {
             VStack(spacing: 0) {
-                if let msg = m.message { NoticeText(text: msg) }
+                if let msg = m.message { NoticeText(text: msg) { m.message = nil } }
+                if m.scanning {
+                    ScanActivity(text: "インストール済みのアプリを調べています…")
+                } else if m.hasScanned {
+                    LastScanNote(date: m.lastScannedAt)
+                }
                 if !m.hasScanned && !m.scanning {
-                    EmptyStateView(symbol: "command", color: Theme.apps, message: "インストールされているアプリと、その関連ファイルを調べます。") {
-                        Button("スキャン") { Task { await m.scan() } }.buttonStyle(.primary)
-                    }
+                    ScanEmptyState(symbol: "command", color: Theme.apps,
+                                   what: "インストール済みのアプリと、その関連ファイルを調べます。") { Task { await m.scan() } }
+                } else if !m.hasScanned {
+                    Color.clear.frame(maxHeight: .infinity)
                 } else if tab == 0 { appsTab(m) } else { leftoversTab(m) }
             }
         }
@@ -55,7 +61,7 @@ struct AppsView: View {
                     HStack {
                         Text("\(a.name) の関連ファイル").bold()
                         Spacer()
-                        Button("Finderで表示") { NSWorkspace.shared.activateFileViewerSelecting([a.url]) }.buttonStyle(.secondary)
+                        Button("Finderで表示") { NSWorkspace.shared.activateFileViewerSelecting([a.url]) }.buttonStyle(.secondary).fixedSize()
                         Button("アンインストール…") {
                             let plan = m.plan(for: a)   // 確認時点の内容で固定
                             let total = plan.related.reduce(0) { $0 + $1.size } + a.size
@@ -66,10 +72,11 @@ struct AppsView: View {
                                                           button: "ゴミ箱へ移動", snapshot: plan) { await m.uninstall($0); selectedApp = nil }
                             }
                         }
-                            .buttonStyle(.secondaryDestructive).disabled(a.isApple || m.isRunning(a))
+                            .buttonStyle(.secondaryDestructive).fixedSize().disabled(a.isApple || m.isRunning(a))
+                            .help(a.isApple ? "Apple 製のアプリは削除できません" : m.isRunning(a) ? "実行中のアプリは削除できません" : "")
                     }
-                    if a.isApple { Text("Apple 製アプリは削除できません。").font(.caption).foregroundStyle(Theme.secondary) }
-                    else if m.isRunning(a) { Text("実行中のため削除できません。終了してから再度スキャンしてください。").font(.caption).foregroundStyle(Theme.warn) }
+                    if a.isApple { Text("Apple 製アプリは削除できません。").font(.system(size: 11)).foregroundStyle(Theme.secondary) }
+                    else if m.isRunning(a) { Text("実行中のため削除できません。終了してから再度スキャンしてください。").font(.system(size: 11)).foregroundStyle(Theme.warn) }
                     List(m.related) { r in
                         HStack {
                             if r.isProtected {
@@ -78,12 +85,13 @@ struct AppsView: View {
                                 Toggle("", isOn: Binding(get: { m.selectedRelated.contains(r.id) },
                                                          set: { if $0 { m.selectedRelated.insert(r.id) } else { m.selectedRelated.remove(r.id) } }))
                                     .labelsHidden()
+                                    .accessibilityLabel("\(r.url.lastPathComponent) を削除対象に含める")
                             }
                             VStack(alignment: .leading) {
                                 Text(r.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).lineLimit(1).truncationMode(.middle)
-                                if r.isSystem { Text("管理者権限が必要なため表示のみ（Finder で開いて手動で削除）").font(.caption).foregroundStyle(Theme.secondary) }
-                                else if r.kind == .bundlePrefix { Text("名前が似ているだけの可能性があります（既定では未選択。内容を確認してください）").font(.caption).foregroundStyle(Theme.warn) }
-                                else if r.kind == .nameOnly { Text("名前のみ一致（既定では未選択）").font(.caption).foregroundStyle(Theme.warn) }
+                                if r.isSystem { Text("管理者権限が必要なため表示のみ（Finder で開いて手動で削除）").font(.system(size: 11)).foregroundStyle(Theme.secondary) }
+                                else if r.kind == .bundlePrefix { Text("名前が似ているだけの可能性があります（既定では未選択。内容を確認してください）").font(.system(size: 11)).foregroundStyle(Theme.warn) }
+                                else if r.kind == .nameOnly { Text("名前のみ一致（既定では未選択）").font(.system(size: 11)).foregroundStyle(Theme.warn) }
                             }
                             Spacer()
                             Text(formatBytes(r.size)).monospacedDigit().foregroundStyle(Theme.secondary)
@@ -111,8 +119,8 @@ struct AppsView: View {
                     VStack(alignment: .leading) {
                         Text(r.url.lastPathComponent)
                         Text(r.url.deletingLastPathComponent().path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                            .font(.caption).foregroundStyle(Theme.secondary)
-                        if r.displayOnly { Text("書類を含む可能性があるため表示のみ（Finder で確認してください）").font(.caption).foregroundStyle(Theme.warn) }
+                            .font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                        if r.displayOnly { Text("書類を含む可能性があるため表示のみ（Finder で確認してください）").font(.system(size: 11)).foregroundStyle(Theme.warn) }
                     }
                     Spacer()
                     Text(formatBytes(r.size)).monospacedDigit().foregroundStyle(Theme.secondary)
@@ -121,7 +129,7 @@ struct AppsView: View {
             .themedList().alternatingRowBackgrounds(.enabled)
             FooterBar {
                 Text("アンインストール済みアプリの残骸候補: \(m.leftovers.count) 件。内容を確認して選択してください。")
-                    .font(.caption).foregroundStyle(Theme.secondary)
+                    .font(.system(size: 11)).foregroundStyle(Theme.secondary)
                 Spacer()
                 Button("選択した項目をゴミ箱へ…") {
                     let snap = Leftovers.deletable(m.leftovers.filter { selectedLeftovers.contains($0.id) })   // 確認時点の内容で固定
@@ -131,7 +139,8 @@ struct AppsView: View {
                                                              button: "ゴミ箱へ移動", snapshot: snap) { await m.trashLeftovers($0) }
                         if done { selectedLeftovers = [] }
                     }
-                }.buttonStyle(.secondaryDestructive).disabled(selectedLeftovers.isEmpty)
+                }.buttonStyle(.secondaryDestructive).fixedSize().disabled(selectedLeftovers.isEmpty)
+                    .help(selectedLeftovers.isEmpty ? "項目を選択してください" : "")
             }
         }
     }

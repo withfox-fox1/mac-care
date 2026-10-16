@@ -7,25 +7,30 @@ struct CleanupView: View {
     var body: some View {
         let m = state.cleanup
         PaneScaffold(item: .cleanup, subtitle: "不要なキャッシュ・ログ・古い開発用の一時フォルダを確認し、ゴミ箱へ移動します。") {
-            if m.scanning || m.cleaning {
-                ProgressView().controlSize(.small)
-                Text(m.cleaning ? "ゴミ箱へ移動中…" : m.progressText).foregroundStyle(Theme.secondary)
-                    .lineLimit(1).truncationMode(.middle).frame(width: 220, alignment: .leading)
-            }
             if m.excludedCount > 0 { StatusBadge(kind: .info, "除外 \(m.excludedCount) 件") }
             if let f = m.lastFreed { StatusBadge(kind: .ok, "解放: \(formatBytes(f))") }
             Button(m.hasScanned ? "再スキャン" : "スキャン") {
                 Task { await m.scan(settings: Settings.load()) }
             }
-            .buttonStyle(.primary)
+            .prominentButton(!m.hasScanned)   // スキャン後は副ボタンに下げ、フッターの実行ボタンを主役にする
+            .fixedSize()
             .disabled(m.scanning || m.cleaning)
+            .help(m.scanning || m.cleaning ? "処理中です。完了までお待ちください" : "")
         } content: {
             VStack(spacing: 0) {
-                if let msg = m.message { NoticeText(text: msg) }
+                if let msg = m.message { NoticeText(text: msg) { m.message = nil } }
+                if m.scanning || m.cleaning {
+                    ScanActivity(text: m.cleaning ? "選択した項目をゴミ箱へ移動しています…"
+                                 : m.progressText.isEmpty ? "掃除できるものを確認しています…" : m.progressText)
+                } else if m.hasScanned {
+                    LastScanNote(date: m.lastScannedAt)
+                }
                 if !m.hasScanned && !m.scanning {
-                    EmptyStateView(symbol: "sparkles", color: Theme.cleanup, message: "スキャンして、掃除できるものを確認しましょう。\n削除前に内容を確認でき、削除はゴミ箱への移動です。") {
-                        Button("スキャン") { Task { await m.scan(settings: Settings.load()) } }.buttonStyle(.primary)
-                    }
+                    ScanEmptyState(symbol: "sparkles", color: Theme.cleanup,
+                                   what: "不要なキャッシュやログなど、掃除できるものを探します。",
+                                   durationKey: "cleanup") { Task { await m.scan(settings: Settings.load()) } }
+                } else if !m.hasScanned {
+                    Color.clear.frame(maxHeight: .infinity)
                 } else {
                     List {
                         Section("不要データ") {
@@ -39,6 +44,7 @@ struct CleanupView: View {
                 FooterBar {
                     Text("選択中: \(m.selectedCount) 件 / \(formatBytes(m.selectedSize))").foregroundStyle(Theme.secondary)
                     Spacer()
+                    let canTrash = m.selectedCount > 0 && !m.scanning && !m.cleaning
                     Button("選択した項目をゴミ箱へ…") {
                         let jobs = m.snapshotSelected()   // 確認時点の内容で固定
                         let msg = CleanupModel.summary(of: jobs, categories: m.categories)
@@ -49,8 +55,9 @@ struct CleanupView: View {
                             }
                         }
                     }
-                        .buttonStyle(.primaryCompact)
-                        .disabled(m.selectedCount == 0 || m.scanning || m.cleaning)
+                        .prominentButton(canTrash, compact: true).fixedSize()
+                        .disabled(!canTrash)
+                        .help(m.selectedCount == 0 ? "項目を選択してください" : m.scanning || m.cleaning ? "処理中です。完了までお待ちください" : "")
                 }
             }
         }
@@ -75,13 +82,14 @@ struct CleanupView: View {
                             await m.emptyTrash(settings: Settings.load())
                         }
                     }
-                }.buttonStyle(.secondary).disabled(m.trashSize == 0)
+                }.buttonStyle(.secondary).fixedSize().disabled(m.trashSize == 0)
+                    .help(m.trashSize == 0 ? "ゴミ箱は空です" : "")
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 Text("ゴミ箱の内容を読み取るには、フルディスクアクセスの許可が必要です。")
                 Text("システム設定 › プライバシーとセキュリティ › フルディスクアクセス で MacCare を許可してください（任意）。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
                 Button("設定を開く") {
                     if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
                         NSWorkspace.shared.open(u)
@@ -119,12 +127,12 @@ private struct CategoryRow: View {
                                 Text(e.name).lineLimit(1).truncationMode(.middle)
                                 Spacer()
                                 Text(e.reason).foregroundStyle(.secondary)
-                            }.font(.caption)
+                            }.font(.system(size: 11))
                         }
-                    }.font(.caption)
+                    }.font(.system(size: 11))
                 }
                 if category.skipped > 0 {
-                    Text("読み取れず除外: \(category.skipped) 件").font(.caption).foregroundStyle(Theme.warn)
+                    Text("読み取れず除外: \(category.skipped) 件").font(.system(size: 11)).foregroundStyle(Theme.warn)
                 }
                 ForEach(category.items.prefix(100)) { item in
                     Toggle(isOn: itemBinding(item.id)) {
@@ -137,7 +145,7 @@ private struct CategoryRow: View {
                 }
                 if category.items.count > 100 {
                     Text("他 \(category.items.count - 100) 件（上位100件のみ個別表示。分類のチェックで全件選択）")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 4)

@@ -23,6 +23,8 @@ struct CompressCandidate: Identifiable, Hashable {
 enum CompressEstimator {
     /// 候補とする最小サイズ（100MB）
     static let minBytes: Int64 = 100_000_000
+    /// HEVC は同等画質で H.264 よりおおむね 40% 低いビットレートにできる（一般的な目安）。入力に掛ける係数
+    static let hevcBitrateFactor: Double = 0.6
     /// 出力ビットレートの上限（実測 1.8〜3.4 Mbps、中央値 約 2.3 Mbps）
     static let outputBitrateCap: Double = 2_500_000
     /// これ未満は低ビットレート（圧縮効果が小さい）
@@ -36,13 +38,16 @@ enum CompressEstimator {
 
     static func estimatedOutput(size: Int64, duration: Double?) -> Int64? {
         guard let d = duration, let br = bitrate(size: size, duration: duration) else { return nil }
-        return Int64(d * min(br, outputBitrateCap) / 8)
+        return Int64(d * min(br * hevcBitrateFactor, outputBitrateCap) / 8)
     }
 
     /// 推定削減量（0 未満は 0）
     static func estimatedSaving(size: Int64, duration: Double?) -> Int64? {
         estimatedOutput(size: size, duration: duration).map { max(0, size - $0) }
     }
+
+    /// 削減量の表示（0 は「わずか」）
+    static func savingText(_ bytes: Int64) -> String { bytes <= 0 ? "わずか" : "約 \(formatBytes(bytes))" }
 
     static func isLowBitrate(size: Int64, duration: Double?) -> Bool {
         bitrate(size: size, duration: duration).map { $0 < lowBitrateThreshold } ?? false

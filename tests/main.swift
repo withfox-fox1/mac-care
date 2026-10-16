@@ -849,10 +849,13 @@ func compressCandidateTests() {
     check(CompressEstimator.bitrate(size: 200 * M, duration: 100) == 16_000_000, "圧縮候補: ビットレート = size*8/duration")
     check(CompressEstimator.estimatedOutput(size: 200 * M, duration: 100) == 31_250_000, "圧縮候補: 推定出力は 2.5Mbps で頭打ち")
     check(CompressEstimator.estimatedSaving(size: 200 * M, duration: 100) == 168_750_000, "圧縮候補: 推定削減量 = size - 推定出力")
-    // 2Mbps（上限未満）→ 推定出力は元サイズ相当で、削減量 0
-    check(CompressEstimator.estimatedOutput(size: 25 * M, duration: 100) == 25 * M, "圧縮候補: 上限未満は入力ビットレートで見積もる")
-    check(CompressEstimator.estimatedSaving(size: 25 * M, duration: 100) == 0, "圧縮候補: 削減量は 0 未満にならない（低ビットレート）")
-    check(CompressEstimator.estimatedSaving(size: 100 * M, duration: 1) ?? -1 >= 0 && CompressEstimator.estimatedSaving(size: 1, duration: 1_000_000) == 0, "圧縮候補: 端の値でも削減量が負にならない")
+    // 2Mbps（上限未満）→ 入力 × 0.6 で見積もる（1.2Mbps → 15MB、削減 10MB）
+    check(CompressEstimator.estimatedOutput(size: 25 * M, duration: 100) == 15 * M, "圧縮候補: 上限未満は入力ビットレート × 0.6 で見積もる")
+    check(CompressEstimator.estimatedSaving(size: 25 * M, duration: 100) == 10 * M, "圧縮候補: 2.2Mbps 級の H.264 でも削減量が 0 にならない")
+    check(CompressEstimator.estimatedOutput(size: 50 * M, duration: 100) == 30 * M, "圧縮候補: 4Mbps → 2.4Mbps（上限 2.5Mbps 未満は 0.6 倍）")
+    check(CompressEstimator.savingText(0) == "わずか" && CompressEstimator.savingText(-1) == "わずか" && CompressEstimator.savingText(10 * M).hasPrefix("約 "), "圧縮候補: 0 bytes は「わずか」")
+    check((CompressEstimator.estimatedSaving(size: 1, duration: 1_000_000) ?? -1) >= 0, "圧縮候補: 削減量は 0 未満にならない")
+    check(CompressEstimator.estimatedSaving(size: 100 * M, duration: 1) ?? -1 >= 0 && (CompressEstimator.estimatedSaving(size: 1, duration: 1_000_000) ?? -1) >= 0, "圧縮候補: 端の値でも削減量が負にならない")
     // duration 不明
     check(CompressEstimator.bitrate(size: 200 * M, duration: nil) == nil && CompressEstimator.bitrate(size: 200 * M, duration: 0) == nil, "圧縮候補: duration 不明/0 はビットレート nil")
     check(CompressEstimator.estimatedOutput(size: 200 * M, duration: nil) == nil && CompressEstimator.estimatedSaving(size: 200 * M, duration: nil) == nil, "圧縮候補: duration 不明は見込み nil")
@@ -974,6 +977,17 @@ settingsScreenTests()
     check(seen == "m", "確認: undoable:false では付けない")
 }
 _ = runMain { await uxBatch1Tests(); return true }
+
+func onboardingTests() {
+    let d = UserDefaults(suiteName: "maccare.test.onboarding")!
+    d.removePersistentDomain(forName: "maccare.test.onboarding")
+    check(Onboarding.shouldShow(defaults: d, arguments: ["x"]), "オンボーディング: 初回は表示")
+    check(!Onboarding.shouldShow(defaults: d, arguments: ["x", "--open-window", "video"]) && !Onboarding.shouldShow(defaults: d, arguments: ["--show-panel"]), "オンボーディング: 検証用引数では出さない")
+    Onboarding.markShown(defaults: d)
+    check(!Onboarding.shouldShow(defaults: d, arguments: ["x"]), "オンボーディング: 表示済みなら出さない")
+    d.removePersistentDomain(forName: "maccare.test.onboarding")
+}
+onboardingTests()
 
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")

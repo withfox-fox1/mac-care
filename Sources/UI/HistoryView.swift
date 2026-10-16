@@ -22,7 +22,10 @@ struct HistoryView: View {
         PaneScaffold(item: .history, subtitle: "実行した掃除・圧縮・スキャン・削除の記録です。", framed: false) { EmptyView() } content: {
             if rows.isEmpty {
                 CardView(padding: 0) {
-                    EmptyStateView(symbol: "clock.arrow.circlepath", color: Theme.secondary, message: "履歴はまだありません") { EmptyView() }
+                    EmptyStateView(symbol: "clock.arrow.circlepath", color: Theme.secondary,
+                                   message: "履歴はまだありません。\nスマートケアや掃除を実行すると、ここに記録されます。") {
+                        Button("ダッシュボードへ") { state.requestedSection = "dashboard" }.buttonStyle(.primary).fixedSize()
+                    }
                 }
             } else {
                 VStack(alignment: .leading, spacing: 12) {
@@ -115,7 +118,7 @@ private struct StatCard: View {
                 Text(title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.secondary).lineLimit(1)
                 Text(value).font(.system(size: 22, weight: .heavy, design: .rounded)).foregroundStyle(tint)
                     .lineLimit(1).minimumScaleFactor(0.7)
-                if !caption.isEmpty { Text(caption).font(.system(size: 10.5)).foregroundStyle(Theme.secondary.opacity(0.8)).lineLimit(1).minimumScaleFactor(0.8) }
+                if !caption.isEmpty { Text(caption).font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(1).minimumScaleFactor(0.8) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -262,7 +265,7 @@ private struct HistoryDetailView: View {
                 Text(c.name).font(.system(size: 11.5)).foregroundStyle(Theme.text)
                     .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 if !c.detail.isEmpty {
-                    Text(c.detail).font(.system(size: 10.5)).foregroundStyle(Theme.secondary).lineLimit(2)
+                    Text(c.detail).font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

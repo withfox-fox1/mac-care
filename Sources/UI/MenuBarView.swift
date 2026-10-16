@@ -77,12 +77,13 @@ struct MenuBarView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            ScoreRing(score: score, size: 62, lineWidth: 6,
+            ScoreRing(score: state.hasHealthScore ? score : nil, size: 62, lineWidth: 6,
                       symbol: warn ? "exclamationmark.triangle.fill" : "checkmark.shield.fill", tint: tint)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 0) {
                     Text("Mac の状態：").foregroundStyle(Theme.text)
-                    if let tint { Text(HealthScore.word(score)).foregroundStyle(tint) }
+                    if !state.hasHealthScore { Text("未チェック").foregroundStyle(Theme.secondary) }
+                    else if let tint { Text(HealthScore.word(score)).foregroundStyle(tint) }
                     else { Text(HealthScore.word(score)).foregroundStyle(Theme.ringGradient) }
                 }
                 .font(.system(size: 20, weight: .bold))
@@ -261,7 +262,7 @@ struct MenuBarView: View {
             VStack(alignment: .leading, spacing: 0) {
                 title(mx.wifi.isWiFi ? "wifi" : "cable.connector", Color(hex: "67e8f9"),
                       mx.wifi.isWiFi ? (mx.wifi.ssid ?? "Wi-Fi") : "有線",
-                      "↑ \(MetricsMath.rate(mx.netUp))\n↓ \(MetricsMath.rate(mx.netDown))", subLines: 2)
+                      "↑\(MetricsMath.rate(mx.netUp))  ↓\(MetricsMath.rate(mx.netDown))")
                 if mx.speedTesting {
                     HStack(spacing: 6) { ProgressView().controlSize(.small); Text("測定中…").font(.system(size: 12)).foregroundStyle(Theme.secondary) }
                         .frame(maxWidth: .infinity, alignment: .trailing).padding(.top, 8)

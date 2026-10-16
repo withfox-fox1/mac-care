@@ -23,7 +23,8 @@ extension Color {
 
 enum Theme {
     static let text = Color(hex: "eaf6f8")
-    static let secondary = Color(hex: "9fc3cf")
+    /// 補助文字色。紺の背景（最も明るい部分でも約 6:1）に対して 4.5:1 以上を確保
+    static let secondary = Color(hex: "b4d3dd")
     static let accentText = Color(hex: "5eead4")
     static let ok = Color(hex: "4ade80")
     static let warn = Color(hex: "fbbf24")
@@ -89,7 +90,7 @@ struct StatusBadge: View {
     init(kind: BadgeKind, _ text: String) { self.kind = kind; self.text = text }
     var body: some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .bold))
+            .font(.system(size: 11, weight: .bold))
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(kind.color.opacity(0.15), in: Capsule())
             .foregroundStyle(kind.color)
@@ -99,12 +100,13 @@ struct StatusBadge: View {
 struct PrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     var compact = false
+    var large = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 12 : 14, weight: .bold))
+            .font(.system(size: large ? 16 : compact ? 12 : 14, weight: .bold))
             .foregroundStyle(.white)
-            .padding(.horizontal, compact ? 12 : 22).padding(.vertical, compact ? 7 : 10)
-            .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: compact ? 10 : 12, style: .continuous))
+            .padding(.horizontal, large ? 30 : compact ? 12 : 22).padding(.vertical, large ? 14 : compact ? 7 : 10)
+            .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: large ? 14 : compact ? 10 : 12, style: .continuous))
             .shadow(color: Theme.teal.opacity(enabled ? 0.35 : 0), radius: 10, y: 4)
             .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
     }
@@ -127,6 +129,7 @@ struct SecondaryButtonStyle: ButtonStyle {
 extension ButtonStyle where Self == PrimaryButtonStyle {
     static var primary: PrimaryButtonStyle { PrimaryButtonStyle() }
     static var primaryCompact: PrimaryButtonStyle { PrimaryButtonStyle(compact: true) }
+    static var primaryLarge: PrimaryButtonStyle { PrimaryButtonStyle(large: true) }
 }
 extension ButtonStyle where Self == SecondaryButtonStyle {
     static var secondary: SecondaryButtonStyle { SecondaryButtonStyle() }
@@ -135,7 +138,8 @@ extension ButtonStyle where Self == SecondaryButtonStyle {
 
 /// 健康スコアのリング（中央は数字、または symbol 指定時はアイコン）
 struct ScoreRing: View {
-    let score: Int
+    /// nil = 未計測（スマートケア未実行）。数字の代わりに「—」を出し、リングは空にする
+    let score: Int?
     var size: CGFloat = 132
     var lineWidth: CGFloat = 12
     var caption: String? = "健康スコア"
@@ -145,7 +149,7 @@ struct ScoreRing: View {
     var body: some View {
         ZStack {
             Circle().stroke(Color.white.opacity(0.10), lineWidth: lineWidth)
-            Circle().trim(from: 0, to: CGFloat(max(0, min(100, score))) / 100)
+            Circle().trim(from: 0, to: CGFloat(max(0, min(100, score ?? 0))) / 100)
                 .stroke(tint.map { LinearGradient(colors: [$0, $0.opacity(0.7)], startPoint: .leading, endPoint: .trailing) } ?? Theme.ringGradient,
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
@@ -154,13 +158,16 @@ struct ScoreRing: View {
                     .foregroundStyle(tint ?? Theme.accentText)
             } else {
                 VStack(spacing: 3) {
-                    Text("\(score)").font(.system(size: size * 0.29, weight: .heavy, design: .rounded)).foregroundStyle(Theme.text)
+                    Text(score.map { "\($0)" } ?? "—").font(.system(size: size * 0.29, weight: .heavy, design: .rounded)).foregroundStyle(Theme.text)
                     if let caption { Text(caption).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.secondary) }
                 }
             }
         }
         .padding(lineWidth / 2)
         .frame(width: size, height: size)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(caption ?? "健康スコア")
+        .accessibilityValue(score.map { "\($0) 点（100 点満点）" } ?? "未計測")
     }
 }
 
@@ -267,7 +274,99 @@ struct EmptyStateView<Action: View>: View {
     }
 }
 
+/// スキャン前の空状態（統一の 3 段構成）: 何をするか → 安全性 → 主ボタン → 所要時間の目安
+struct ScanEmptyState: View {
+    let symbol: String
+    let color: Color
+    /// 何をするか（1 行）
+    let what: String
+    /// StepDurations のキー。実測値があれば「目安: 約 N 分」を出す（nil なら省略）
+    var durationKey: String? = nil
+    let scan: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 54, weight: .light)).foregroundStyle(color)
+            Text(what).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            Label("スキャンでは何も削除しません", systemImage: "checkmark.shield.fill")
+                .font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
+            Button("スキャンする", action: scan).buttonStyle(.primary).fixedSize().padding(.top, 4)
+            if let t = ScanEstimate.text(durationKey) {
+                Text(t).font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+            }
+        }
+        .padding(30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 所要時間の目安（StepDurations の実測値。キーが無い・値が無いときは nil）
+enum ScanEstimate {
+    static func text(_ key: String?, durations: [String: Double]? = nil) -> String? {
+        guard let key, let sec = (durations ?? StepDurations.load())[key], sec > 0 else { return nil }
+        if sec < 60 { return "目安: 1分未満" }
+        return "目安: 約 \(Int((sec / 60).rounded())) 分"
+    }
+}
+
+/// 情報行（左にアイコン、文言、必要なら右に閉じるボタン）。注意・情報・前回との差分の表示に共通で使う
+struct StatusStrip: View {
+    var symbol: String = "info.circle.fill"
+    var tint: Color = Theme.info
+    let text: String
+    var dismiss: (() -> Void)? = nil
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundStyle(tint).accessibilityHidden(true)
+            Text(text).font(.system(size: 12.5)).foregroundStyle(tint == Theme.warn ? Theme.warn : Theme.secondary)
+                .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+            if let dismiss {
+                Button(action: dismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                    .buttonStyle(.plain).foregroundStyle(Theme.secondary).fixedSize()
+                    .accessibilityLabel("閉じる").help("閉じる")
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 進行中の表示: 「何をしているか」の文言＋不確定バー
+struct ScanActivity: View {
+    let text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.text)
+                .lineLimit(1).truncationMode(.middle)
+            ProgressView().progressViewStyle(.linear).tint(Theme.teal)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 「前回のスキャン（今日 11:42）の結果です」
+struct LastScanNote: View {
+    let date: Date?
+    var body: some View {
+        if let date {
+            Text("前回のスキャン（\(ShortDate.format(date))）の結果です。最新にするには「再スキャン」を押してください。")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 extension View {
+    /// 主ボタン／副ボタンを状態で切り替える（ButtonStyle の型が違うため分岐する）
+    @ViewBuilder func prominentButton(_ primary: Bool, compact: Bool = false) -> some View {
+        if primary {
+            if compact { self.buttonStyle(.primaryCompact) } else { self.buttonStyle(.primary) }
+        } else { self.buttonStyle(.secondary) }
+    }
     /// 常にダークで表示する（ウィンドウ・パネル共通）
     func oceanScheme() -> some View {
         self.preferredColorScheme(.dark).tint(Theme.teal).foregroundStyle(Theme.text)

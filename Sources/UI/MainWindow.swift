@@ -61,6 +61,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
 struct MainWindow: View {
     @Environment(AppState.self) private var state
+    @State private var showOnboarding = false
     private var selection: SidebarItem { SidebarItem(rawValue: state.currentSection) ?? .dashboard }
 
     var body: some View {
@@ -81,7 +82,14 @@ struct MainWindow: View {
         .oceanScheme()
         .frame(minWidth: 960, minHeight: 620)
         .background(WindowConfigurator())
-        .onAppear { applyRequest(); WindowOpener.bringToFront() }
+        .onAppear {
+            applyRequest(); WindowOpener.bringToFront()
+            if Onboarding.shouldShow() { showOnboarding = true }
+        }
+        .sheet(isPresented: $showOnboarding) {
+            OnboardingView { Onboarding.markShown(); showOnboarding = false }
+                .interactiveDismissDisabled()
+        }
         .onChange(of: state.requestedSection) { applyRequest() }
     }
 
@@ -90,8 +98,8 @@ struct MainWindow: View {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(SidebarItem.groups.enumerated()), id: \.offset) { _, g in
                     if let t = g.title {
-                        Text(t).font(.system(size: 10.5, weight: .bold)).tracking(0.8)
-                            .foregroundStyle(Color(hex: "6f98a6")).padding(.leading, 12).padding(.top, 14).padding(.bottom, 6)
+                        Text(t).font(.system(size: 11, weight: .bold)).tracking(0.8)
+                            .foregroundStyle(Color(hex: "8fb6c3")).padding(.leading, 12).padding(.top, 14).padding(.bottom, 6)
                     }
                     ForEach(g.items) { row($0) }
                 }

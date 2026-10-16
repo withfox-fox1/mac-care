@@ -3,6 +3,7 @@ import AppKit
 
 struct SecurityView: View {
     @Environment(AppState.self) private var state
+    @State private var showHelp = false
 
     /// 検査済み / 前回から変更なし の内訳
     private func engineLine(_ ran: Bool, _ total: Int, _ cached: Int, _ date: Date) -> String {
@@ -25,7 +26,6 @@ struct SecurityView: View {
     }
 
     var body: some View {
-        @Bindable var st = state
         let m = state.security
         PaneScaffold(item: .security, subtitle: "常時保護は macOS 標準（XProtect / Gatekeeper）が担当します。ここでは追加のスキャンを行います。") {
             if m.running {
@@ -34,11 +34,28 @@ struct SecurityView: View {
                                   detailText: m.detail, width: 270)
                 Button("キャンセル") { m.cancel() }.buttonStyle(.secondary)
             } else {
-                Picker("方式", selection: $st.settings.quickScan) {
-                    Text("クイック（変更分のみ）").tag(true)
-                    Text("フル（すべて）").tag(false)
-                }.pickerStyle(.segmented).labelsHidden().fixedSize()
-                Button(m.hasScanned ? "再スキャン" : "スキャン") { m.start(state: state) }.buttonStyle(.primary)
+                // 既定はクイック。メニューで選んだ方式は今回のスキャンだけに使い、設定値（quickScan）は書き換えない
+                HStack(spacing: 0) {
+                    Button(m.hasScanned ? "再スキャン" : "スキャン") { m.start(state: state, full: false) }
+                        .buttonStyle(.primary).fixedSize()
+                    Menu {
+                        Button("変更されたファイルだけ検査（速い）") { m.start(state: state, full: false) }
+                        Button("すべてのファイルを検査（時間がかかります）") { m.start(state: state, full: true) }
+                    } label: { Text("スキャン方式") }
+                        .menuStyle(.borderlessButton).menuIndicator(.visible).fixedSize()
+                        .help("スキャン方式を選んで実行")
+                }
+                Button { showHelp.toggle() } label: { Image(systemName: "questionmark.circle") }
+                    .buttonStyle(.plain).foregroundStyle(Theme.secondary).fixedSize()
+                    .accessibilityLabel("スキャン方式の説明")
+                    .popover(isPresented: $showHelp, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("クイック: 前回から変更のないファイルは再検査せず、新規・変更分のみ検査します。").fixedSize(horizontal: false, vertical: true)
+                            Text("フル: すべてのファイルを両エンジンで検査します（毎日の定期スキャンがフルです）。").fixedSize(horizontal: false, vertical: true)
+                            Text("現在のモード: \(state.settings.deepScan ? "じっくりスキャン" : "標準スキャン")（設定で変更できます）").foregroundStyle(Theme.secondary)
+                        }
+                        .font(.callout).padding(14).frame(width: 320)
+                    }
             }
         } content: {
             List {
@@ -53,9 +70,7 @@ struct SecurityView: View {
                     } else { Text("取得中…").foregroundStyle(.secondary) }
                 }
                 Section {
-                    Text("現在のモード: \(state.settings.deepScan ? "じっくりスキャン" : "標準スキャン")（設定で変更できます）").font(.caption).foregroundStyle(Theme.secondary)
                     Text(FullScanLabel.text(m.lastFullAt) + coverageNote(m.lastFullAt)).font(.caption).foregroundStyle(Theme.secondary)
-                    Text("クイック: 前回から変更のないファイルは再検査せず、新規・変更分のみ検査します。フル: すべてのファイルを両エンジンで検査します（毎日の定期スキャンがフルです）。").font(.caption).foregroundStyle(Theme.secondary)
                 }
                 if let msg = m.message { Section { Text(msg).foregroundStyle(Theme.warn) } }
                 if let r = m.lastReport {
@@ -124,6 +139,5 @@ struct SecurityView: View {
             if state.consumeAutoScan("security") { m.start(state: state) }
         }
         .onChange(of: m.running) { _, now in if !now { state.markAutoScanDone("security") } }
-        .onChange(of: state.settings.quickScan) { _, v in var d = Settings.load(); d.quickScan = v; try? d.save() }
     }
 }

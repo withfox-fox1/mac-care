@@ -37,7 +37,7 @@ struct ScanProgressBlock: View {
             ScanProgressBar(fraction: fraction)
             Text(stepText).font(.system(size: 11.5)).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
             if !detailText.isEmpty {
-                Text(detailText).font(.system(size: 11)).foregroundStyle(Theme.secondary.opacity(0.85)).lineLimit(1).truncationMode(.middle)
+                Text(detailText).font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
             }
         }
         .frame(width: width, alignment: .leading)

@@ -145,6 +145,12 @@ struct MacCareApp: App {
         }
     }
 
+    /// 画面を切り替える。ウィンドウが閉じていれば開く
+    @MainActor static func show(_ item: SidebarItem) {
+        AppState.shared.requestedSection = item.rawValue
+        WindowOpener.open()
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuBarView().environment(state)
@@ -161,6 +167,20 @@ struct MacCareApp: App {
                 .onDisappear { NSApp.setActivationPolicy(.accessory) }
         }
         .defaultSize(width: 1100, height: 720)
+        .commands {
+            // 表示メニュー: ⌘1〜⌘9 で各画面へ（削除系にはショートカットを付けない）
+            CommandGroup(replacing: .sidebar) {
+                ForEach(Array(SidebarItem.allCases.enumerated()), id: \.element.id) { i, item in
+                    Button(item.title) { MacCareApp.show(item) }
+                        .keyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .command)
+                }
+            }
+            // 標準の「設定…」(⌘,) を、アプリ内の設定画面を開く動作に置き換える
+            CommandGroup(replacing: .appSettings) {
+                Button("設定…") { MacCareApp.show(.settings) }
+                    .keyboardShortcut(",", modifiers: .command)
+            }
+        }
 
         // 検証用（--show-panel）: パネルの内容を通常のウィンドウで表示する
         Window("MacCare パネル", id: "panel") {

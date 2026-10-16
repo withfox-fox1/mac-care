@@ -262,6 +262,7 @@ final class AppsModel {
     var selectedRelated: Set<String> = []
     var scanning = false
     var hasScanned = false
+    var lastScannedAt: Date? = nil
     var message: String? = nil
     var runningIDs: Set<String> = []
     private var scanTask: Task<Void, Never>?
@@ -287,7 +288,7 @@ final class AppsModel {
                                       installedIDs: Set(apps.map(\.bundleID)), runningIDs: running)
             return (apps, left)
         }.value
-        apps = a; leftovers = l; hasScanned = true; scanning = false
+        apps = a; leftovers = l; hasScanned = true; lastScannedAt = Date(); scanning = false
         computeSizesInBackground()
     }
 
@@ -359,6 +360,7 @@ final class LoginItemsModel {
     var items: [LoginItem] = []
     var scanning = false
     var hasScanned = false
+    var lastScannedAt: Date? = nil
     var message: String? = nil
     var diff: SnapshotDiff? = nil
 
@@ -367,7 +369,7 @@ final class LoginItemsModel {
         scanning = true; message = nil
         let r = await LoginItems.fullScan()
         items = r.items; diff = r.diff
-        hasScanned = true; scanning = false
+        hasScanned = true; lastScannedAt = Date(); scanning = false
         if let d = r.diff, !d.new.isEmpty { notify(newLabels: d.new) }
     }
 

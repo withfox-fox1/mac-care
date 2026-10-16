@@ -5,7 +5,9 @@ enum VideoPreset: String, CaseIterable, Identifiable {
     case standard, high
     var id: String { rawValue }
     var quality: Int { self == .standard ? 50 : 60 }
-    var label: String { self == .standard ? "標準 (-q:v 50)" : "高画質 (-q:v 60)" }
+    var label: String { self == .standard ? "標準（容量優先）" : "高画質（画質優先）" }
+    /// 技術的な補足（q 値）。ツールチップ用
+    var detail: String { "変換の品質値 -q:v \(quality)（大きいほど高画質で、容量は大きくなります）" }
 }
 
 struct MediaInfo: Equatable {

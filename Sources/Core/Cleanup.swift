@@ -256,6 +256,8 @@ final class CleanupModel {
     var lastFreed: Int64? = nil
     var message: String? = nil
     var hasScanned = false
+    /// 直近のスキャン完了時刻（画面に「前回のスキャン」を出すため。再起動で消える）
+    var lastScannedAt: Date? = nil
     var trashReadable = false
     var trashSize: Int64 = 0
     private var scanTask: Task<Void, Never>?
@@ -315,7 +317,7 @@ final class CleanupModel {
         categories = cats
         selected = selected.intersection(Set(cats.flatMap { $0.items.map(\.id) }))
         trashReadable = readable; trashSize = tsize
-        hasScanned = true; scanning = false; progressText = ""
+        hasScanned = true; lastScannedAt = Date(); scanning = false; progressText = ""
     }
 
     /// スナップショットされた項目のみをゴミ箱へ（SafeTrash 経由）。共有の選択状態は読まない・変更しない。

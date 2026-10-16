@@ -25,11 +25,11 @@ struct PaneScaffold<Actions: View, Content: View>: View {
     }
 }
 
-/// 注意メッセージ（警告色）
+/// 注意メッセージ（警告色）。dismiss を渡すと右に閉じるボタンが付く
 struct NoticeText: View {
     let text: String
+    var dismiss: (() -> Void)? = nil
     var body: some View {
-        Text(text).font(.callout).foregroundStyle(Theme.warn)
-            .padding(.horizontal, 14).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
+        StatusStrip(symbol: "exclamationmark.triangle.fill", tint: Theme.warn, text: text, dismiss: dismiss)
     }
 }

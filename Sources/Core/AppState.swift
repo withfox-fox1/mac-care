@@ -84,6 +84,8 @@ final class AppState {
                            lastSmartCare: r?.date, now: Date())
     }
     var healthScore: Int { HealthScore.score(healthInput) }
+    /// スマートケア未実行ではスコアを出さない（初期値の「100」を実測と誤解させないため）
+    var hasHealthScore: Bool { smartCare.result != nil }
 
     var recommendationInput: RecommendationInput {
         let r = smartCare.result

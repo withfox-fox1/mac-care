@@ -11,20 +11,25 @@ struct LargeFilesView: View {
     var body: some View {
         let m = state.largeFiles
         PaneScaffold(item: .largeFiles, subtitle: "設定の閾値以上のファイルを検索します（システム用のフォルダは除外）。") {
-            if m.scanning { ProgressView().controlSize(.small); Text("検索中…").foregroundStyle(Theme.secondary) }
             Button(m.hasScanned ? "再スキャン" : "スキャン") {
                 Task { await m.scan(settings: Settings.load()) }
-            }.buttonStyle(.primary).disabled(m.scanning)
+            }.prominentButton(!m.hasScanned).fixedSize().disabled(m.scanning)
+                .help(m.scanning ? "スキャン中です" : "")
         } content: {
             VStack(spacing: 0) {
-                if m.hasScanned || m.message != nil {
-                    Text([m.info, m.message ?? ""].filter { !$0.isEmpty }.joined(separator: "　"))
-                        .font(.caption).foregroundStyle(Theme.secondary).padding(.horizontal, 14).padding(.vertical, 6).lineLimit(2).frame(maxWidth: .infinity)
+                if m.scanning {
+                    ScanActivity(text: "大きなファイルを探しています…")
+                } else if m.hasScanned || m.message != nil {
+                    StatusStrip(text: [m.info, m.message ?? ""].filter { !$0.isEmpty }.joined(separator: "　"),
+                                dismiss: m.message == nil ? nil : { m.message = nil })
+                    if m.hasScanned { LastScanNote(date: m.lastScannedAt) }
                 }
                 if !m.hasScanned && !m.scanning {
-                    EmptyStateView(symbol: "externaldrive.fill", color: Theme.largeFiles, message: "閾値以上の大きなファイルを探して一覧にします。") {
-                        Button("スキャン") { Task { await m.scan(settings: Settings.load()) } }.buttonStyle(.primary)
-                    }
+                    ScanEmptyState(symbol: "externaldrive.fill", color: Theme.largeFiles,
+                                   what: "設定の閾値以上の大きなファイルを探して、一覧にします。",
+                                   durationKey: "largeFiles") { Task { await m.scan(settings: Settings.load()) } }
+                } else if !m.hasScanned {
+                    Color.clear.frame(maxHeight: .infinity)
                 } else {
                     Table(m.files.sorted(using: sortOrder), selection: $selection, sortOrder: $sortOrder) {
                         TableColumn("名前", value: \.name) { Text($0.name).lineLimit(1).truncationMode(.middle) }
@@ -42,11 +47,17 @@ struct LargeFilesView: View {
                     Spacer()
                     Button("Finderで表示") {
                         NSWorkspace.shared.activateFileViewerSelecting(selectedFiles.map(\.url))
-                    }.buttonStyle(.secondary).disabled(selection.isEmpty)
+                    }.buttonStyle(.secondary).fixedSize().disabled(selection.isEmpty)
+                        .help(selection.isEmpty ? "ファイルを選択してください" : "")
+                    // 主ボタンは選択内容で 1 つだけ: 圧縮対象の動画だけを選んでいるときは「圧縮キューへ追加」
+                    let compressOnly = !selectedFiles.isEmpty && selectedFiles.allSatisfy(\.needsCompression)
                     Button("圧縮キューへ追加") {
                         let n = state.compressQueue.add(selectedFiles.filter(\.needsCompression).map(\.url))
                         m.message = n > 0 ? "\(n) 件を圧縮キューに追加しました。" : "追加できる動画がありません（圧縮済みの動画は対象外です）。"
-                    }.buttonStyle(.secondary).disabled(!selectedFiles.contains(where: \.needsCompression))
+                    }.prominentButton(compressOnly, compact: true).fixedSize()
+                        .disabled(!selectedFiles.contains(where: \.needsCompression))
+                        .help(selection.isEmpty ? "ファイルを選択してください"
+                              : !selectedFiles.contains(where: \.needsCompression) ? "圧縮できる動画が選択されていません（圧縮済みの動画は対象外です）" : "")
                     Button("ゴミ箱へ…") {
                         let targets = selectedFiles                              // 確認時点の内容で固定
                         let roots = Settings.load().largeFileRoots.map { URL(fileURLWithPath: $0) }
@@ -58,7 +69,8 @@ struct LargeFilesView: View {
                                                                  button: "ゴミ箱へ移動", snapshot: targets) { await m.trash($0, roots: roots) }
                             if done { selection = [] }
                         }
-                    }.buttonStyle(.secondaryDestructive).disabled(selection.isEmpty)
+                    }.buttonStyle(.secondaryDestructive).fixedSize().disabled(selection.isEmpty)
+                        .help(selection.isEmpty ? "ファイルを選択してください" : "")
                 }
             }
         }
