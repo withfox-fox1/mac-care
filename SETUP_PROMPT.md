@@ -57,7 +57,8 @@ ls /Applications/MacCare.app/Contents/Resources   # AppIcon.icns などがある
 ```
 
 - メニューバーに MacCare のアイコンが出ていること、「ウィンドウを開く」でウィンドウが開くことをユーザーに確認してもらう。
-- 設定画面で、外部ツール（yara / yarac / clamscan / freshclam / ffmpeg / ffprobe / brew）がすべてパス表示（未インストールではない）になっていること。
+- 初回のウィンドウ表示時に案内（オンボーディング）が出る。内容を読んでもらい、閉じてもらう。
+- 設定画面の上部に「〜に必要なツールが見つかりません」という警告が出ていないこと。「バージョン詳細」を開くと「使用している外部ツール」が「N/N 利用可能」になっていること（yara / yarac / clamscan / freshclam / ffmpeg / ffprobe / brew）。
 
 ### 5. ユーザーに確認すること
 
