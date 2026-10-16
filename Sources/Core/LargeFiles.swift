@@ -1,6 +1,7 @@
 import Foundation
 import CoreServices
 import Observation
+import AVFoundation
 
 struct LargeFile: Identifiable, Hashable {
     let url: URL
@@ -11,6 +12,10 @@ struct LargeFile: Identifiable, Hashable {
     var name: String { url.lastPathComponent }
     var folder: String { url.deletingLastPathComponent().path }
     var isVideo: Bool { VideoCompressor.supportedExtensions.contains(url.pathExtension.lowercased()) }
+    /// 映像が HEVC（圧縮済み）か。スキャン後に判定する
+    var isHEVC = false
+    /// 圧縮の提案対象（HEVC 以外の動画）
+    var needsCompression: Bool { isVideo && !isHEVC }
 }
 
 enum LargeFileScanner {
@@ -81,7 +86,11 @@ final class LargeFilesModel {
         let r = await Task.detached(priority: .userInitiated) {
             LargeFileScanner.scan(roots: roots, thresholdBytes: threshold)
         }.value
-        files = r
+        var marked = r
+        for i in marked.indices where marked[i].isVideo {
+            marked[i].isHEVC = await VideoCodec.isHEVC(marked[i].url)
+        }
+        files = marked
         hasScanned = true; scanning = false
         info = "\(r.count) 件 / 合計 \(formatBytes(r.reduce(0) { $0 + $1.size })) （\(String(format: "%.1f", Date().timeIntervalSince(start))) 秒）"
     }
@@ -96,5 +105,17 @@ final class LargeFilesModel {
         let gone = Set(targets.map(\.id))
         files.removeAll { gone.contains($0.id) && !FileManager.default.fileExists(atPath: $0.url.path) }
         message = failed > 0 ? "\(failed) 件をゴミ箱へ移動できませんでした（検索範囲外、または保護対象）。" : nil
+    }
+}
+
+/// 動画のコーデック判定（AVFoundation。外部ツール不要）
+enum VideoCodec {
+    static let hevcSubTypes: Set<FourCharCode> = [kCMVideoCodecType_HEVC, 0x68657631]   // 'hvc1', 'hev1'
+
+    static func isHEVC(_ url: URL) async -> Bool {
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let descs = try? await track.load(.formatDescriptions) else { return false }
+        return descs.contains { hevcSubTypes.contains(CMFormatDescriptionGetMediaSubType($0)) }
     }
 }

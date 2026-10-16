@@ -83,7 +83,7 @@ final class AppState {
 
     var recommendationInput: RecommendationInput {
         let r = smartCare.result
-        let videos = largeFiles.files.filter(\.isVideo)
+        let videos = largeFiles.files.filter(\.needsCompression)
         return RecommendationInput(
             videoCount: videos.count, videoBytes: videos.reduce(0) { $0 + $1.size },
             cleanMyMacItems: loginItems.items.filter { $0.label.lowercased().contains("com.macpaw") }.count,

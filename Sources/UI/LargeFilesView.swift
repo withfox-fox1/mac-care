@@ -33,7 +33,7 @@ struct LargeFilesView: View {
                         TableColumn("最終使用日", value: \.lastUsed) {
                             Text($0.lastUsed.formatted(date: .abbreviated, time: .omitted))
                         }.width(110)
-                        TableColumn("種類", value: \.kind) { Text($0.kind) }.width(130)
+                        TableColumn("種類", value: \.kind) { Text($0.isHEVC ? "\($0.kind)（圧縮済み）" : $0.kind) }.width(170)
                     }
                     .themedList().alternatingRowBackgrounds(.enabled)
                 }
@@ -44,9 +44,9 @@ struct LargeFilesView: View {
                         NSWorkspace.shared.activateFileViewerSelecting(selectedFiles.map(\.url))
                     }.buttonStyle(.secondary).disabled(selection.isEmpty)
                     Button("圧縮キューへ追加") {
-                        let n = state.compressQueue.add(selectedFiles.filter(\.isVideo).map(\.url))
-                        m.message = n > 0 ? "\(n) 件を圧縮キューに追加しました。" : "追加できる動画がありません。"
-                    }.buttonStyle(.secondary).disabled(!selectedFiles.contains(where: \.isVideo))
+                        let n = state.compressQueue.add(selectedFiles.filter(\.needsCompression).map(\.url))
+                        m.message = n > 0 ? "\(n) 件を圧縮キューに追加しました。" : "追加できる動画がありません（圧縮済みの動画は対象外です）。"
+                    }.buttonStyle(.secondary).disabled(!selectedFiles.contains(where: \.needsCompression))
                     Button("ゴミ箱へ") {
                         let targets = selectedFiles                              // 確認時点の内容で固定
                         let roots = Settings.load().largeFileRoots.map { URL(fileURLWithPath: $0) }

@@ -99,7 +99,7 @@ struct DashboardView: View {
     private func cards(_ m: SmartCareModel) -> some View {
         let r = m.result
         let login = (r?.newLoginItems ?? 0) + (r?.changedLoginItems ?? 0)
-        let videos = state.largeFiles.files.filter(\.isVideo).count
+        let videos = state.largeFiles.files.filter(\.needsCompression).count
         let junk = r?.junkBytes ?? 0
         return HStack(alignment: .top, spacing: 12) {
             StatusCard(title: "不要データ", symbol: "sparkles", color: Theme.cleanup, step: stepState(.cleanup, m),

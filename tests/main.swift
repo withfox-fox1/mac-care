@@ -249,6 +249,10 @@ func runVideoTests() async {
         // HEVC 済みはスキップ
         let again = await VideoCompressor.compress(input: outURL, preset: .standard, ffmpeg: ffmpeg, ffprobe: ffprobe)
         check(again == .skipped("HEVC 変換済み") && fm.fileExists(atPath: outURL.path), "E2E: HEVC 済みはスキップ")
+        let h264 = await gen("v1/codec_h264.mov")
+        let isH = await VideoCodec.isHEVC(outURL), isA = await VideoCodec.isHEVC(h264)
+        let isMissing = await VideoCodec.isHEVC(work.appendingPathComponent("none.mp4"))
+        check(isH && !isA && !isMissing, "E2E: HEVC 判定（圧縮済みは true、H.264・読めないものは false）")
     } else { check(false, "E2E: 圧縮成功 (\(oc))") }
     // 検証失敗ケース（verifier 注入）
     let src2 = await gen("v2/in2.mov")
@@ -703,6 +707,11 @@ func metricsTests() {
           && ProcessStats.appName(path: "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores") == "Spotlight（索引作成）"
           && ProcessStats.appName(path: "com.macpaw.CleanMyMac5.HealthMonitor") == "CleanMyMac5 HealthMonitor"
           && ProcessStats.appName(path: "./run") == "run" && ProcessStats.appName(path: "a.b") == "a.b", "ps: .app 外の表示名")
+var lf = LargeFile(url: URL(fileURLWithPath: "/x/a.mov"), size: 1, lastUsed: Date(), kind: "")
+let lfBefore = lf.needsCompression
+lf.isHEVC = true
+check(lfBefore && !lf.needsCompression && !LargeFile(url: URL(fileURLWithPath: "/x/a.zip"), size: 1, lastUsed: Date(), kind: "").needsCompression,
+      "大容量: 圧縮済み動画と動画以外は圧縮の提案対象外")
     let usage = ProcessStats.aggregate(ents)
     check(ProcessStats.topMemory(usage)?.name == "Google Chrome" && ProcessStats.topMemory(usage)?.memoryBytes == (3355443 + 1048576) * 1024, "ps: ヘルパーを合算して最大メモリ")
     check(ProcessStats.topCPU(usage)?.cpu == 20.5, "ps: 最大CPU")
