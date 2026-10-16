@@ -732,6 +732,117 @@ healthTests()
 metricsTests()
 scanUpdateTests()
 
+// MARK: - 履歴のグループ化・集計
+func historyTests() {
+    var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+    func dt(_ d: Int, _ h: Int, _ m: Int, _ s: Int = 0, month: Int = 10, year: Int = 2026) -> Date {
+        cal.date(from: DateComponents(year: year, month: month, day: d, hour: h, minute: m, second: s))!
+    }
+    func en(_ d: Date, _ k: HistoryKind, _ t: String, _ b: Int64 = 0, _ r: String = "ok", _ det: String = "") -> HistoryEntry {
+        HistoryEntry(date: d, kind: k, target: t, bytes: b, result: r, detail: det)
+    }
+    let t0 = dt(14, 18, 13, 38)
+
+    // クリーンアップ要約＋同時刻の trash は 1 行にまとまり、二重計上されない
+    var es: [HistoryEntry] = (1...3).map { en(t0, .trash, "/Users/x/Library/Caches/a\($0)", Int64($0) * 1000) }
+    es.append(en(t0, .cleanup, "3 件", 6000, "ok", "失敗 0 件"))
+    var rows = HistoryGrouping.rows(from: es)
+    check(rows.count == 1 && rows[0].title == "3 項目をゴミ箱へ" && rows[0].children.count == 3 && rows[0].freedBytes == 6000, "履歴: cleanup と同時刻 trash を 1 行に束ねる")
+    let now = dt(16, 12, 0)
+    var st = HistoryGrouping.stats(rows, now: now, calendar: cal)
+    check(st.totalFreed == 6000 && st.monthFreed == 6000, "履歴: クリーンアップは要約の bytes のみ集計（二重計上なし）")
+
+    // 秒が切り上がって 1 秒ずれた trash も同じ要約に入る。要約より件数が多い古い trash は取り込まない
+    es = [en(t0.addingTimeInterval(-300), .trash, "/old", 77), en(t0.addingTimeInterval(-1), .trash, "/a", 10), en(t0, .trash, "/b", 20), en(t0, .cleanup, "2 件", 30)]
+    rows = HistoryGrouping.rows(from: es)
+    check(rows.count == 2 && rows[0].children.count == 2 && rows[1].title == "1 項目をゴミ箱へ", "履歴: 件数上限と 5 秒閾値で別操作の trash を取り込まない")
+
+    // 時刻が離れた trash は別行、近いものは束ねる（要約なし）
+    es = [en(t0, .trash, "/a", 1), en(t0.addingTimeInterval(3), .trash, "/b", 2), en(t0.addingTimeInterval(8.5), .trash, "/c", 4), en(t0.addingTimeInterval(200), .trash, "/d", 8)]
+    rows = HistoryGrouping.rows(from: es)
+    check(rows.count == 3 && rows.map(\.itemCount) == [1, 1, 2], "履歴: 要約なしの trash は 5 秒以内ごとに束ねる（間隔は連鎖で判定）")
+    check(rows[2].freedBytes == 3 && rows[2].title == "2 項目をゴミ箱へ", "履歴: 束ねた trash の容量は合計")
+
+    // 圧縮: 元ファイルの trash は取り込み、削減量のみを集計
+    es = [en(t0, .trash, "/private/tmp/ナレッジ/動画.mov", 900), en(t0, .compress, "/tmp/ナレッジ/動画.mov", 700, "ok", "出力: /tmp/ナレッジ/動画.mp4")]
+    rows = HistoryGrouping.rows(from: es)
+    check(rows.count == 1 && rows[0].title == "動画を圧縮" && rows[0].subtitle == "動画.mp4" && rows[0].outputPath == "/tmp/ナレッジ/動画.mp4" && rows[0].freedBytes == 700, "履歴: 圧縮は元 trash を取り込み出力先を保持")
+    st = HistoryGrouping.stats(rows, now: now, calendar: cal)
+    check(st.totalFreed == 700, "履歴: 圧縮は削減量のみ集計")
+
+    // アンインストール: アプリ＋関連の trash を取り込む
+    es = [en(t0, .trash, "/Applications/Foo.app", 500), en(t0, .trash, "/Users/x/Library/Foo", 50),
+          en(t0, .uninstall, "/Applications/Foo.app", 550, "ok", "com.foo、関連 1 件、失敗 0 件")]
+    rows = HistoryGrouping.rows(from: es)
+    check(rows.count == 1 && rows[0].title == "アプリを削除" && rows[0].children.count == 2 && HistoryGrouping.stats(rows, now: now, calendar: cal).totalFreed == 550, "履歴: アンインストールの trash を取り込む")
+
+    // ゴミ箱を空にする: 行の容量は出すが累計には含めない
+    es = [en(t0, .cleanup, "~/.Trash", 5000)]
+    rows = HistoryGrouping.rows(from: es)
+    check(rows[0].isEmptyTrash && rows[0].freedBytes == 5000 && HistoryGrouping.stats(rows, now: now, calendar: cal).totalFreed == 0, "履歴: ゴミ箱を空にした分は累計に含めない")
+
+    // スキャン回数: スマートケア内のセキュリティスキャン・定期通知は 1 回
+    let s0 = dt(15, 5, 10, 28)
+    es = [en(s0.addingTimeInterval(-2), .scan, "セキュリティスキャン（10 対象）", 0, "clean", "YARA 0 / ClamAV 0 件、標準モード、1025 秒"),
+          en(s0, .scan, "スマートケア（定期フル）", 540672, "clean", "脅威 0 件 / 不要データ 541 KB / 新しいログイン項目 0 件、1025 秒"),
+          en(s0, .scan, "定期フルスキャン", 540672, "notified", "脅威 0 件 / 不要データ 541 KB"),
+          en(s0.addingTimeInterval(600), .scan, "セキュリティスキャン（10 対象）", 0, "clean", "YARA 0 / ClamAV 0 件、30 秒"),
+          en(s0.addingTimeInterval(700), .scan, "/tmp/evil", 0, "ignored", "YARA: x")]
+    rows = HistoryGrouping.rows(from: es)
+    st = HistoryGrouping.stats(rows, now: now, calendar: cal)
+    check(rows.count == 3 && st.scanCount == 2, "履歴: スキャン回数はスマートケア一式を 1 回・無視操作は数えない")
+    let sc = rows.first { $0.title == "スマートケア" }
+    check(sc?.children.count == 2 && sc?.overview == "脅威 0 件・不要データ 541 KB" && sc?.seconds == 1025 && sc?.subtitle == "定期フル・所要 17分", "履歴: スマートケア行に関連記録と概要・所要時間")
+    // 通知記録が単独（直前に定期スマートケアが無い）なら 1 回と数える
+    rows = HistoryGrouping.rows(from: [en(s0, .scan, "定期スキャン", 1, "no-notification-permission", "脅威 0 件")])
+    check(rows.count == 1 && rows[0].countsAsScan, "履歴: 単独の通知記録も 1 回")
+    // 古い版: 通知記録が 136 秒後でも直前の定期スマートケアに結びつく
+    rows = HistoryGrouping.rows(from: [en(s0, .scan, "スマートケア（定期）", 1, "clean", "脅威 0 件"), en(s0.addingTimeInterval(136), .scan, "定期スキャン", 1, "no-notification-permission", "")])
+    check(rows.count == 1 && rows[0].children.count == 1, "履歴: 遅れた通知記録も結びつける")
+
+    // 失敗件数: failed と partial。成功は数えない
+    es = [en(t0, .trash, "/f", 1, "failed", "x"), en(t0.addingTimeInterval(100), .cleanup, "~/.Trash", 0, "failed", "e"),
+          en(t0.addingTimeInterval(200), .uninstall, "残骸 2 件", 5, "partial"), en(t0.addingTimeInterval(300), .compress, "/a.mov", 5, "ok", "出力: /a.mp4")]
+    rows = HistoryGrouping.rows(from: es)
+    st = HistoryGrouping.stats(rows, now: now, calendar: cal)
+    check(rows.count == 4 && st.failureCount == 3, "履歴: 失敗件数は失敗＋一部失敗")
+    check(rows.first { $0.isEmptyTrash }?.freedBytes == nil, "履歴: 失敗した操作は解放容量を出さない")
+
+    // 今月の判定（月初・月末・前年同月）
+    es = [en(dt(1, 0, 0, 0), .compress, "/a.mov", 10, "ok", "出力: /a.mp4"),
+          en(dt(30, 23, 59, 59, month: 9), .compress, "/b.mov", 100, "ok", "出力: /b.mp4"),
+          en(dt(20, 12, 0, 0, year: 2025), .compress, "/c.mov", 1000, "ok", "出力: /c.mp4"),
+          en(dt(31, 23, 59, 59), .compress, "/d.mov", 10000, "ok", "出力: /d.mp4")]
+    rows = HistoryGrouping.rows(from: es)
+    st = HistoryGrouping.stats(rows, now: now, calendar: cal)
+    check(st.totalFreed == 11110 && st.monthFreed == 10010, "履歴: 今月の判定（前月末・前年同月・月末を区別）")
+
+    // 日付見出しの区切り（23:59:59 と 0:00:00 は別の日）
+    es = [en(dt(15, 23, 59, 59), .compress, "/a.mov", 1, "ok", "出力: /a.mp4"), en(dt(16, 0, 0, 0), .compress, "/b.mov", 1, "ok", "出力: /b.mp4"),
+          en(dt(16, 11, 59, 59), .compress, "/c.mov", 1, "ok", "出力: /c.mp4"), en(dt(14, 8, 0, 0), .compress, "/d.mov", 1, "ok", "出力: /d.mp4"),
+          en(dt(20, 8, 0, 0, month: 12, year: 2025), .compress, "/e.mov", 1, "ok", "出力: /e.mp4")]
+    let secs = HistoryGrouping.sections(HistoryGrouping.rows(from: es), now: now, calendar: cal)
+    check(secs.map(\.title) == ["今日", "昨日", "10月14日（水）", "2025年12月20日（土）"], "履歴: 日付見出し（今日・昨日・曜日付き・他年）")
+    check(secs.map { $0.rows.count } == [2, 1, 1, 1], "履歴: 0 時の境界で日が分かれ、新しい順に並ぶ")
+    check(HistoryFormat.time(dt(3, 9, 5), calendar: cal) == "09:05", "履歴: 時刻表示")
+
+    // 並び順と同時刻の記録順
+    es = [en(t0, .compress, "/a.mov", 1, "ok", "出力: /a.mp4"), en(t0, .compress, "/b.mov", 2, "ok", "出力: /b.mp4")]
+    check(HistoryGrouping.rows(from: es).map(\.freedBytes) == [2, 1], "履歴: 同時刻は後から記録した方が上")
+
+    // result の日本語化
+    check(HistoryResult.label("ok") == "成功" && HistoryResult.label("failed") == "失敗" && HistoryResult.label("clean") == "脅威なし"
+          && HistoryResult.label("notified") == "通知済み" && HistoryResult.label("no-notification-permission") == "通知なし（権限未許可）"
+          && HistoryResult.label("partial") == "一部失敗" && HistoryResult.label("found") == "脅威を検出", "履歴: result の日本語化")
+    check(HistoryResult.label("mystery") == "mystery" && HistoryResult.outcome("mystery") == .info && HistoryResult.outcome("failed") == .failure, "履歴: 未知の result はそのまま表示")
+
+    // 絞り込み
+    check(HistoryKind.allCases.allSatisfy { k in HistoryFilter.allCases.filter { $0 != .all }.filter { $0.matches(k) }.count == 1 }, "履歴: 全 kind がちょうど 1 つの絞り込みに属する")
+    check(HistoryFilter.delete.matches(.uninstall) && HistoryFilter.delete.matches(.loginItem) && HistoryFilter.cleanup.matches(.trash), "履歴: 削除＝アンインストール・ログイン項目、掃除＝cleanup・trash")
+    check(HistoryFormat.freed(2_000_000_000) == "−\(formatBytes(2_000_000_000))" && HistoryFormat.freed(0) == nil && HistoryFormat.freed(-5)?.hasPrefix("+") == true, "履歴: 解放容量の符号表示")
+}
+historyTests()
+
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")
 exit(failures == 0 ? 0 : 1)

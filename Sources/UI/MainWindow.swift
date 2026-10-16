@@ -162,29 +162,6 @@ struct MainWindow: View {
     }
 }
 
-struct HistoryView: View {
-    @Environment(AppState.self) private var state
-
-    var body: some View {
-        PaneScaffold(item: .history, subtitle: "実行した掃除・スキャン・削除の記録です。") { EmptyView() } content: {
-            if state.history.isEmpty {
-                EmptyStateView(symbol: "clock.arrow.circlepath", color: Theme.secondary, message: "履歴はまだありません") { EmptyView() }
-            } else {
-                Table(state.history) {
-                    TableColumn("日時") { Text($0.date.formatted(date: .abbreviated, time: .shortened)) }
-                        .width(min: 120, ideal: 150)
-                    TableColumn("種類") { Text($0.kind.rawValue) }.width(80)
-                    TableColumn("対象") { Text($0.target).lineLimit(1).truncationMode(.middle) }
-                    TableColumn("サイズ") { Text(formatBytes($0.bytes)) }.width(80)
-                    TableColumn("結果") { Text($0.result) }.width(70)
-                }
-                .themedList().alternatingRowBackgrounds(.enabled)
-            }
-        }
-        .onAppear { state.refresh() }
-    }
-}
-
 /// ウィンドウをタイトルバーなし風にする（信号ボタンだけ残し、背景色を揃える）
 struct WindowConfigurator: NSViewRepresentable {
     final class V: NSView {
