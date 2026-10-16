@@ -699,6 +699,10 @@ func metricsTests() {
     let ents = ProcessStats.parse(ps)
     check(ents.count == 3 && ents[0].pid == 101 && ents[0].path.hasSuffix("Google Chrome"), "ps: 空白を含むパスを解析")
     check(ProcessStats.appName(path: ents[1].path) == "Google Chrome" && ProcessStats.appName(path: "/usr/libexec/trustd") == "trustd", "ps: .app 単位の名前")
+    check(ProcessStats.appName(path: "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent") == "Web コンテンツ（WebKit）"
+          && ProcessStats.appName(path: "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores") == "Spotlight（索引作成）"
+          && ProcessStats.appName(path: "com.macpaw.CleanMyMac5.HealthMonitor") == "CleanMyMac5 HealthMonitor"
+          && ProcessStats.appName(path: "./run") == "run" && ProcessStats.appName(path: "a.b") == "a.b", "ps: .app 外の表示名")
     let usage = ProcessStats.aggregate(ents)
     check(ProcessStats.topMemory(usage)?.name == "Google Chrome" && ProcessStats.topMemory(usage)?.memoryBytes == (3355443 + 1048576) * 1024, "ps: ヘルパーを合算して最大メモリ")
     check(ProcessStats.topCPU(usage)?.cpu == 20.5, "ps: 最大CPU")

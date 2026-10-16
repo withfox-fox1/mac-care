@@ -83,7 +83,30 @@ enum ProcessStats {
         for comp in path.split(separator: "/") where comp.hasSuffix(".app") {
             return String(comp.dropLast(4))
         }
-        return (path as NSString).lastPathComponent
+        return friendlyName((path as NSString).lastPathComponent)
+    }
+
+    /// .app に属さないプロセスの表示名（主要なシステムプロセスは役割を併記する）
+    static let knownNames: [String: String] = [
+        "WindowServer": "WindowServer（画面描画）",
+        "kernel_task": "kernel_task（システム）",
+        "mds": "Spotlight（索引作成）", "mds_stores": "Spotlight（索引作成）", "mdworker": "Spotlight（索引作成）",
+        "mdworker_shared": "Spotlight（索引作成）", "mdsync": "Spotlight（索引作成）",
+        "backupd": "Time Machine", "bird": "iCloud Drive（同期）", "cloudd": "iCloud（同期）",
+        "photoanalysisd": "写真（解析）", "mediaanalysisd": "写真（解析）",
+        "softwareupdated": "ソフトウェア・アップデート", "xprotectd": "XProtect（マルウェア対策）",
+        "coreaudiod": "オーディオ", "logd": "ログ記録", "BackgroundShortcutRunner": "ショートカット",
+    ]
+
+    /// 逆ドメイン形式（com.vendor.Product.Helper）は vendor を除いた名前にする。WebKit の補助プロセスはまとめる。
+    static func friendlyName(_ name: String) -> String {
+        if let k = knownNames[name] { return k }
+        if name.hasPrefix("com.apple.WebKit.") { return "Web コンテンツ（WebKit）" }
+        let parts = name.split(separator: ".")
+        if parts.count >= 3, ["com", "org", "io", "net", "jp", "co"].contains(parts[0]) {
+            return parts.dropFirst(2).joined(separator: " ")
+        }
+        return name
     }
 
     /// アプリ単位（ヘルパー込み）に集計する

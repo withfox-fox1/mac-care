@@ -61,7 +61,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
 struct MainWindow: View {
     @Environment(AppState.self) private var state
-    @State private var selection: SidebarItem = .dashboard
+    private var selection: SidebarItem { SidebarItem(rawValue: state.currentSection) ?? .dashboard }
 
     var body: some View {
         ZStack {
@@ -104,7 +104,7 @@ struct MainWindow: View {
 
     private func row(_ item: SidebarItem) -> some View {
         let on = selection == item
-        return Button { selection = item } label: {
+        return Button { state.currentSection = item.rawValue } label: {
             HStack(spacing: 11) {
                 if item == .dashboard {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -150,7 +150,7 @@ struct MainWindow: View {
     private func applyRequest() {
         guard let name = state.requestedSection else { return }
         if let item = SidebarItem.from(name) {
-            selection = item
+            state.currentSection = item.rawValue
             // --scan 指定時のみ、表示後に読み取り専用スキャンを自動開始する（ダッシュボードは従来のキー smartCare を使う）
             if state.launchScanPending {
                 state.autoScanSection = item == .dashboard ? "smartCare" : item.rawValue

@@ -59,6 +59,8 @@ final class AppState {
     }
     /// 起動引数などで指定されたサイドバー項目
     var requestedSection: String? = nil
+    /// 表示中のサイドバー項目（rawValue）。ウィンドウのビューが作り直されても選択を保つため AppState に置く
+    var currentSection: String = "dashboard"
     /// 前回スキャン結果の要約（P3 以降で設定）
     var lastScanSummary: String? = nil
 
