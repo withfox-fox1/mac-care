@@ -35,7 +35,7 @@ ls /opt/homebrew/bin/brew /usr/local/bin/brew 2>/dev/null
 ```bash
 cd ~
 if [ -d mac-care/.git ]; then git -C mac-care pull --ff-only; else git clone https://github.com/withfox-fox1/mac-care.git; fi
-cd ~/mac-care
+cd ~/claude/tools/mac-care
 ```
 
 ### 3. インストール
@@ -69,5 +69,5 @@ ls /Applications/MacCare.app/Contents/Resources   # AppIcon.icns などがある
 ## 注意
 
 - 標準のセキュリティスキャンは ClamAV で `/Applications` を除外している（時間短縮）。ユーザーが望めば設定の「じっくりスキャン」を有効にできる。
-- 更新: `cd ~/mac-care && git pull --ff-only && ./install.sh --app-only`
+- 更新: `cd ~/claude/tools/mac-care && git pull --ff-only && ./install.sh --app-only`
 - 削除: `./uninstall.sh`（Homebrew のパッケージは残る）。

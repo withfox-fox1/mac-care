@@ -127,7 +127,7 @@ CleanMyMac（現行 CleanMyMac 5 / v5.7.1）を解約しても困らない状態
 
 ## 5. 配布
 
-- GitHub リポジトリ（`~/mac-care`）。`install.sh`（brew 依存の導入、ClamAV 設定、ビルド、/Applications へ配置）と `SETUP_PROMPT.md`（Claude Code 向け導入指示書）を用意する。
+- GitHub リポジトリ（`~/claude/tools/mac-care`）。`install.sh`（brew 依存の導入、ClamAV 設定、ビルド、/Applications へ配置）と `SETUP_PROMPT.md`（Claude Code 向け導入指示書）を用意する。
 - 公開範囲：public（https://github.com/withfox-fox1/mac-care）。更新は `git pull --ff-only && ./install.sh --app-only`。
 - `uninstall.sh` はアプリとログイン項目を削除し、データ削除は確認する。brew パッケージは削除しない。
 

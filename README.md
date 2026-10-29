@@ -23,8 +23,8 @@ macOS のメンテナンスを 1 つにまとめた個人用アプリ（メニ�
 必要なもの: macOS 14 以降、Xcode Command Line Tools（`xcode-select --install`）、Homebrew。
 
 ```bash
-git clone https://github.com/withfox-fox1/mac-care.git ~/mac-care
-cd ~/mac-care
+git clone https://github.com/withfox-fox1/mac-care.git ~/claude/tools/mac-care
+cd ~/claude/tools/mac-care
 ./install.sh              # yara / clamav / ffmpeg の導入、ClamAV 設定、ビルド、/Applications へ配置
 ./install.sh --app-only   # アプリだけビルドして入れ直す
 ```
@@ -36,7 +36,7 @@ cd ~/mac-care
 ### 更新
 
 ```bash
-cd ~/mac-care && git pull --ff-only && ./install.sh --app-only
+cd ~/claude/tools/mac-care && git pull --ff-only && ./install.sh --app-only
 ```
 
 ### アンインストール

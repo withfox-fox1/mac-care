@@ -94,7 +94,7 @@
 
 ### 注意事項
 - ターミナルにフルディスクアクセスがなく `~/.Trash` は未調査。
-- 削除対象外：`~/Library/Application Support/Claude/vm_bundles`（10GB）、`~/voicevox_engine`。
+- 削除対象外：`~/Library/Application Support/Claude/vm_bundles`（10GB）、`~/claude/tools/voicevox_engine`。
 
 ## 2026-10-15 夕方
 - ナレッジ動画の圧縮（`--compress-list`、リストは `~/Library/Application Support/MacCare/knowledge_compress_list.txt`）を 17:22 開始、18:19 に移動のため中断。7/20 本完了。
