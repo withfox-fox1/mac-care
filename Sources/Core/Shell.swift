@@ -63,13 +63,18 @@ enum Shell {
         _ executable: String,
         _ arguments: [String] = [],
         onLine: (@Sendable (String) -> Void)? = nil,
-        onStart: (@Sendable (Int32) -> Void)? = nil
+        onStart: (@Sendable (Int32) -> Void)? = nil,
+        environment: [String: String]? = nil,
+        qos: QualityOfService? = nil   // nil なら親の優先度のまま
     ) async throws -> ShellResult {
         try Task.checkCancellation()
         let box = ProcessBox()
         let p = box.process
         p.executableURL = URL(fileURLWithPath: executable)
         p.arguments = arguments
+        if let qos { p.qualityOfService = qos }
+        // 指定があれば親の環境にマージして渡す（nil なら親の環境をそのまま継承）
+        if let environment { p.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new } }
         let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe

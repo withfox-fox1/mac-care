@@ -283,6 +283,20 @@ check(YaraEngine.parse("RuleA /tmp/a b/c.bin\nRuleB /tmp/d\nnoise line\n") ==
 check(ClamEngine.parse("/tmp/x/eicar.com: Win.Test.EICAR_HDB-1 FOUND\n/tmp/y: z: a FOUND\nWARNING: foo\n") ==
       [Detection(engine: .clamav, signature: "Win.Test.EICAR_HDB-1", path: "/tmp/x/eicar.com"),
        Detection(engine: .clamav, signature: "a", path: "/tmp/y: z")], "ClamAV 出力の解析")
+// OpenSSL 4.1 回避環境（純粋関数）
+do {
+    let tool = "/opt/homebrew/bin/clamscan", cellar = "/opt/homebrew/Cellar/openssl@4/4.0.3/lib"
+    let backup = "/h/.maccare-vendor/openssl@4-4.0.3/lib"
+    func env(_ ver: String?, _ libs: Set<String>) -> [String: String]? {
+        ClamEngine.openSSLWorkaroundEnv(tool: tool, optTarget: { _ in ver.map { "../Cellar/openssl@4/" + $0 } },
+                                        exists: { libs.contains($0) }, home: "/h")
+    }
+    check(env("4.1.0", [cellar + "/libcrypto.4.dylib", backup + "/libcrypto.4.dylib"]) == ["DYLD_LIBRARY_PATH": cellar], "OpenSSL回避: 4.1系はCellar 4.0.3のlib")
+    check(env("4.0.3", [cellar + "/libcrypto.4.dylib"]) == nil, "OpenSSL回避: 4.0系は何もしない")
+    check(env("4.1.0", []) == nil, "OpenSSL回避: 候補なしはnil")
+    check(env("4.1.0", [backup + "/libcrypto.4.dylib"]) == ["DYLD_LIBRARY_PATH": backup], "OpenSSL回避: Cellar無しはバックアップ")
+    check(env(nil, [cellar + "/libcrypto.4.dylib"]) == nil, "OpenSSL回避: opt リンク無しはnil")
+}
 let ig = mk("ig/f.bin")
 var ignoreList: [IgnoredDetection] = []
 IgnoreList.add(path: ig.path, to: &ignoreList)
@@ -379,6 +393,12 @@ func dec(_ now: Date, last: Date?, low: Bool = false, busy: Bool = false, _ s: S
 }
 let noon = jd(2026, 10, 15, 12, 0)
 check(dec(noon, last: nil) == .run, "スケジューラ: 未実行なら実行")
+check(SchedulerLogic.decide(settings: sch, now: noon, lastFull: nil, batteryLow: false, busy: false, lidClosed: true, calendar: jcal) == .skipLidClosed, "スケジューラ: 蓋閉じ（画面なし）なら開始しない")
+check(SchedulerLogic.decide(settings: sch, now: noon, lastFull: nil, batteryLow: false, busy: false, lidClosed: false, calendar: jcal) == .run, "スケジューラ: 蓋が開いていれば実行")
+check(SchedulerLogic.decide(settings: sch, now: noon, lastFull: jd(2026, 10, 15, 0, 0), batteryLow: false, busy: false, lidClosed: true, calendar: jcal) == .notDue, "スケジューラ: 蓋閉じでも実行済みなら notDue（優先）")
+check(SchedulerLogic.decide(settings: sch, now: noon, lastFull: nil, batteryLow: false, busy: true, lidClosed: true, calendar: jcal) == .skipBusy, "スケジューラ: busy は蓋閉じより先")
+check(SecurityModel.scanQoS(lowPriority: true) == .utility && SecurityModel.scanQoS(lowPriority: false) == nil, "スキャン優先度: 定期のみ .utility、手動は nil")
+check(SchedulerLogic.decide(settings: sch, now: noon, lastFull: nil, batteryLow: true, busy: false, lidClosed: true, calendar: jcal) == .skipBattery, "スケジューラ: 低バッテリー判定が蓋閉じより先")
 check(dec(noon, last: jd(2026, 10, 15, 0, 3)) == .notDue, "スケジューラ: 今日0:03に実行済みなら実行しない(1日1回)")
 check(dec(jd(2026, 10, 15, 23, 59), last: jd(2026, 10, 15, 0, 3)) == .notDue, "スケジューラ: 同じ日の23:59も実行しない")
 check(dec(jd(2026, 10, 15, 0, 0), last: jd(2026, 10, 14, 0, 3)) == .run, "スケジューラ: 日付が変わった0:00ちょうどで実行")
@@ -541,7 +561,7 @@ let scRes = runMain { () -> SmartCareResult? in
             let r: (junk: Int64, safeJunk: Int64) = (100, 40)
             s.cleanup.categories = []          // ステップ後に共有状態が変わる（別の掃除など）
             return r },
-        security: { _, _ in 2 }, loginItems: { _ in (1, 0) }, largeFiles: { _, _ in (3, 9) })
+        security: { _, _, _ in 2 }, loginItems: { _ in (1, 0) }, largeFiles: { _, _ in (3, 9) })
     await st.smartCare.run(state: st)
     return st.smartCare.result
 }

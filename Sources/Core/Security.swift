@@ -185,12 +185,12 @@ enum YaraEngine {
     }
 
     /// ファイル一覧を渡して検査する。戻り値: 検出と、読み取れなかったパス
-    static func scan(compiled: URL, files: [ScanFile], yara: String) async throws -> (hits: [Detection], unreadable: Set<String>) {
+    static func scan(compiled: URL, files: [ScanFile], yara: String, qos: QualityOfService? = nil) async throws -> (hits: [Detection], unreadable: Set<String>) {
         try Storage.ensureDir()
         let list = Storage.baseDir.appendingPathComponent("yara-list-\(UUID().uuidString).txt")
         try files.map(\.path).joined(separator: "\n").write(to: list, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: list) }
-        let r = try await Shell.run(yara, ["-C", "-f", "-w", "--scan-list", compiled.path, list.path])
+        let r = try await Shell.run(yara, ["-C", "-f", "-w", "--scan-list", compiled.path, list.path], qos: qos)
         if isFailure(r) { throw SecurityError.engineFailed("yara: \(r.stderr.split(separator: "\n").first ?? "")") }
         return (parse(r.stdout), YaraErrors.unreadable(r.stderr))
     }
@@ -211,9 +211,30 @@ enum ClamEngine {
         }
     }
 
+    /// OpenSSL 4.1 で ClamAV 1.5.4 が定義を読めない不具合（Cisco-Talos/clamav PR #1873）の回避。
+    /// Homebrew の openssl@4 が 4.1 系のとき、4.0.3 の lib を DYLD_LIBRARY_PATH で渡す。P8-2 のツール同梱で削除する。
+    /// 純粋関数: optTarget は `<prefix>/opt/openssl@4` のリンク先、exists は存在確認。
+    static func openSSLWorkaroundEnv(tool: String, optTarget: (String) -> String?, exists: (String) -> Bool,
+                                     home: String = NSHomeDirectory()) -> [String: String]? {
+        let prefix = URL(fileURLWithPath: tool).deletingLastPathComponent().deletingLastPathComponent().path
+        guard let target = optTarget("\(prefix)/opt/openssl@4"),
+              URL(fileURLWithPath: target).lastPathComponent.hasPrefix("4.1.") else { return nil }
+        let candidates = ["\(prefix)/Cellar/openssl@4/4.0.3/lib", "\(home)/.maccare-vendor/openssl@4-4.0.3/lib"]
+        guard let lib = candidates.first(where: { exists($0 + "/libcrypto.4.dylib") }) else { return nil }
+        return ["DYLD_LIBRARY_PATH": lib]
+    }
+
+    /// 実環境版（clamscan / freshclam 専用。他ツールには渡さない）
+    static func workaroundEnv(tool: String) -> [String: String]? {
+        openSSLWorkaroundEnv(tool: tool,
+                             optTarget: { try? FileManager.default.destinationOfSymbolicLink(atPath: $0) },
+                             exists: { FileManager.default.fileExists(atPath: $0) })
+    }
+
     /// 終了コード 0=クリーン, 1=検出, その他=エラー
     static func scan(targets: [URL], clamscan: String, onLine: (@Sendable (String) -> Void)? = nil) async throws -> [Detection] {
-        let r = try await Shell.run(clamscan, ["-r", "-i", "--no-summary"] + limitArgs + targets.map(\.path), onLine: onLine)
+        let r = try await Shell.run(clamscan, ["-r", "-i", "--no-summary"] + limitArgs + targets.map(\.path), onLine: onLine,
+                                   environment: workaroundEnv(tool: clamscan))
         switch r.exitCode {
         case 0, 1: return parse(r.stdout)
         default: throw SecurityError.engineFailed("clamscan がエラー終了 (\(r.exitCode)): \(r.stderr.split(separator: "\n").first ?? "")")
@@ -249,13 +270,14 @@ enum ClamEngine {
     }
 
     /// ファイル一覧を渡して検査する（--file-list）。1 ファイルごとに結果行が出るので進捗に使える。
-    static func scan(files: [ScanFile], clamscan: String, progress: ByteProgress) async throws -> ClamOutcome {
+    static func scan(files: [ScanFile], clamscan: String, progress: ByteProgress, qos: QualityOfService? = nil) async throws -> ClamOutcome {
         try Storage.ensureDir()
         let list = Storage.baseDir.appendingPathComponent("clam-list-\(UUID().uuidString).txt")
         try files.map(\.path).joined(separator: "\n").write(to: list, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: list) }
         let col = ClamCollector(sizes: Dictionary(files.map { ($0.path, $0.size) }, uniquingKeysWith: { a, _ in a }), progress: progress)
-        let r = try await Shell.run(clamscan, ["--file-list=\(list.path)", "--no-summary"] + limitArgs, onLine: { col.handle($0) })
+        let r = try await Shell.run(clamscan, ["--file-list=\(list.path)", "--no-summary"] + limitArgs, onLine: { col.handle($0) },
+                                   environment: workaroundEnv(tool: clamscan), qos: qos)
         let o = col.outcome
         switch r.exitCode {
         case 0, 1: break
@@ -432,23 +454,25 @@ final class SecurityModel {
     @ObservationIgnored private var useYara = false
     @ObservationIgnored private var meter = ProgressMeter()
     @ObservationIgnored private var bps: [String: Double] = [:]
+    /// 定期スキャンなら clamscan / yara を低優先度（.utility）で動かす。.background は省電力コアのみで約 4 倍遅くなるため不採用。それ以外は nil（親のまま）
+    nonisolated static func scanQoS(lowPriority: Bool) -> QualityOfService? { lowPriority ? .utility : nil }
 
     func refreshStatus() async { if let st = await XProtect.status(previous: status) { status = st } }
 
     /// スキャン完了まで待つ（スマートケア用）。full=nil なら設定（クイック/フル）に従う
-    func scan(state: AppState, full: Bool? = nil) async {
-        start(state: state, full: full)
+    func scan(state: AppState, full: Bool? = nil, lowPriority: Bool = false) async {
+        start(state: state, full: full, lowPriority: lowPriority)
         await task?.value
     }
 
-    func start(state: AppState, full: Bool? = nil) {
+    func start(state: AppState, full: Bool? = nil, lowPriority: Bool = false) {
         guard !running else { return }
         running = true; message = nil
         fraction = 0; etaText = ""; detail = ""; estimatedSeconds = nil
         let wantFull = full ?? !Settings.load().quickScan
         runningFull = wantFull
         task = Task { [weak self] in
-            await self?.run(state: state, full: wantFull)
+            await self?.run(state: state, full: wantFull, lowPriority: lowPriority)
             self?.running = false; self?.step = .idle
         }
     }
@@ -472,12 +496,13 @@ final class SecurityModel {
         etaText = ETAFormat.text(meter.update(fraction: f, now: now))
     }
 
-    private func run(state: AppState, full: Bool) async {
+    private func run(state: AppState, full: Bool, lowPriority: Bool = false) async {
         let settings = Settings.load()
-        let t0 = Date()
+        let t0 = ProcessInfo.processInfo.systemUptime   // スリープ中に進まない単調時計
         var report = ScanReport()
         report.quick = !full
         bps = StepDurations.load()
+        let qos = Self.scanQoS(lowPriority: lowPriority)   // 開始時に確定し、BPS 学習の判定にも同じ値を使う
         // フルスキャン中はスリープさせない（AC 接続時に有効。バッテリー駆動では保証されない）
         let sleepGuard = full ? SleepGuard(reason: "MacCare フルスキャン") : nil
         defer { sleepGuard?.release() }
@@ -502,9 +527,9 @@ final class SecurityModel {
             if let fresh = freshclam {
                 step = .definitions
                 if FileManager.default.fileExists(atPath: ClamEngine.freshclamConf(freshclam: fresh).path) {
-                    let tf = Date()
-                    let r = try await Shell.run(fresh, [])
-                    report.freshclamSeconds = Date().timeIntervalSince(tf)
+                    let tf = ProcessInfo.processInfo.systemUptime
+                    let r = try await Shell.run(fresh, [], environment: ClamEngine.workaroundEnv(tool: fresh))
+                    report.freshclamSeconds = ProcessInfo.processInfo.systemUptime - tf
                     if r.exitCode != 0 { report.warnings.append("定義の更新に失敗しました（既存の定義でスキャンします）: \(r.stderr.split(separator: "\n").last ?? "")") }
                 } else {
                     report.warnings.append("freshclam.conf がありません（\(ClamEngine.freshclamConf(freshclam: fresh).path)）。install.sh で設定してください。")
@@ -555,8 +580,8 @@ final class SecurityModel {
             let yFiles = yPlan.toScan, cFiles = cPlan.toScan
             let yP = yaraP, cP = clamP
             let yp = yaraPath, cp = clamPath
-            async let yRes = Self.runYara(files: yFiles, yara: yp, compiled: compiled, progress: yP)
-            async let cRes = Self.runClam(files: cFiles, clam: cp, progress: cP)
+            async let yRes = Self.runYara(files: yFiles, yara: yp, compiled: compiled, progress: yP, qos: qos)
+            async let cRes = Self.runClam(files: cFiles, clam: cp, progress: cP, qos: qos)
             let (yo, co) = try await (yRes, cRes)
 
             report.ranYara = yo.ran; report.yaraHits = yo.hits.count; report.yaraSeconds = yo.seconds
@@ -580,8 +605,9 @@ final class SecurityModel {
             // 次回の進捗見積り用に処理速度を保存
             var upd: [String: Double] = [:]
             let cb = Double(cFiles.reduce(0) { $0 + $1.size }), yb = Double(yFiles.reduce(0) { $0 + $1.size })
-            if co.seconds > 3, cb > 100e6 { upd["clamBPS"] = cb / co.seconds }
-            if yo.seconds > 3, yb > 100e6 { upd["yaraBPS"] = yb / yo.seconds }
+            // 低優先度で測った速度は遅く出るので、定期実行では学習しない
+            if !lowPriority, co.seconds > 3, cb > 100e6 { upd["clamBPS"] = cb / co.seconds }
+            if !lowPriority, yo.seconds > 3, yb > 100e6 { upd["yaraBPS"] = yb / yo.seconds }
             if !upd.isEmpty { StepDurations.save(StepDurations.load().merging(upd) { _, n in n }) }
         } catch {
             message = "スキャンを中止しました。"
@@ -592,7 +618,7 @@ final class SecurityModel {
         let filtered = IgnoreList.filter(found, list: settings.ignoredDetections)
         detections = filtered.visible
         report.hidden = filtered.hidden
-        report.duration = Date().timeIntervalSince(t0)
+        report.duration = ProcessInfo.processInfo.systemUptime - t0
         lastReport = report; hasScanned = true
         ScanReportStore.save(StoredScan(report: report, detections: filtered.visible))
         let total = filtered.visible.count
@@ -603,15 +629,15 @@ final class SecurityModel {
                                          detail: "\(report.summary)、\(report.deep ? "じっくり" : "標準")モード・\(cache)、無視 \(report.hidden) 件、ClamAV上限超 \(report.clamOverLimit) 件、読取不可 \(report.unreadable) 件、\(Int(report.duration)) 秒（定義更新 \(Int(report.freshclamSeconds)) 秒・YARA \(Int(report.yaraSeconds)) 秒・ClamAV \(Int(report.clamSeconds)) 秒、負荷 \(String(format: "%.1f", Power.loadAverage()))）"))
     }
 
-    nonisolated static func runYara(files: [ScanFile], yara: String?, compiled: URL, progress: ByteProgress) async throws -> EngineOutcome {
+    nonisolated static func runYara(files: [ScanFile], yara: String?, compiled: URL, progress: ByteProgress, qos: QualityOfService? = nil) async throws -> EngineOutcome {
         var o = EngineOutcome()
         guard let yara else { progress.finish(); return o }
-        let t = Date()
+        let t = ProcessInfo.processInfo.systemUptime
         var failed = false
         for chunk in ScanFileList.chunks(files) {
             try Task.checkCancellation()
             do {
-                let r = try await YaraEngine.scan(compiled: compiled, files: chunk, yara: yara)
+                let r = try await YaraEngine.scan(compiled: compiled, files: chunk, yara: yara, qos: qos)
                 let hitPaths = Set(r.hits.map(\.path))
                 o.hits += r.hits
                 o.unreadable += r.unreadable.count
@@ -621,24 +647,24 @@ final class SecurityModel {
             progress.add(chunk.reduce(0) { $0 + $1.size })
         }
         o.ran = !failed
-        o.seconds = Date().timeIntervalSince(t)
+        o.seconds = ProcessInfo.processInfo.systemUptime - t
         progress.finish()
         return o
     }
 
-    nonisolated static func runClam(files: [ScanFile], clam: String?, progress: ByteProgress) async throws -> EngineOutcome {
+    nonisolated static func runClam(files: [ScanFile], clam: String?, progress: ByteProgress, qos: QualityOfService? = nil) async throws -> EngineOutcome {
         var o = EngineOutcome()
         guard let clam else { progress.finish(); return o }
-        let t = Date()
+        let t = ProcessInfo.processInfo.systemUptime
         if !files.isEmpty {
             do {
-                let r = try await ClamEngine.scan(files: files, clamscan: clam, progress: progress)
+                let r = try await ClamEngine.scan(files: files, clamscan: clam, progress: progress, qos: qos)
                 o.hits = r.hits; o.clean = r.clean; o.unreadable = r.errors
                 o.ran = true
             } catch is CancellationError { throw CancellationError() }
             catch { o.warnings.append("\(error)") }
         } else { o.ran = true }
-        o.seconds = Date().timeIntervalSince(t)
+        o.seconds = ProcessInfo.processInfo.systemUptime - t
         progress.finish()
         return o
     }

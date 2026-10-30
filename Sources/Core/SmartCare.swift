@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import IOKit
 import IOKit.ps
 import Observation
 import ServiceManagement
@@ -53,7 +54,7 @@ enum SmartCare {
 
 // MARK: - スケジューラ
 
-enum ScheduleDecision: Equatable { case run, disabled, notDue, skipBusy, skipBattery }
+enum ScheduleDecision: Equatable { case run, disabled, notDue, skipBusy, skipBattery, skipLidClosed }
 
 enum SchedulerLogic {
     /// now 以前で最も新しい「毎日 hh:mm」の時刻（夏時間でも Calendar に任せる）
@@ -65,7 +66,7 @@ enum SchedulerLogic {
 
     /// フルスキャンの実行判定。直近の予定時刻以降に一度もフルスキャンしていなければ実行（取り逃しの補完を含む）。
     /// 予定時刻ごとに 1 回だけ実行されるため、1 日に複数回は走らない。
-    static func decide(settings: Settings, now: Date, lastFull: Date?, batteryLow: Bool, busy: Bool,
+    static func decide(settings: Settings, now: Date, lastFull: Date?, batteryLow: Bool, busy: Bool, lidClosed: Bool = false,
                        calendar: Calendar = .current) -> ScheduleDecision {
         guard settings.scheduledScanEnabled else { return .disabled }
         let target = lastTarget(now: now, hour: settings.fullScanHour, minute: settings.fullScanMinute, calendar: calendar)
@@ -73,6 +74,7 @@ enum SchedulerLogic {
         if let last, last >= target { return .notDue }
         if busy { return .skipBusy }
         if batteryLow { return .skipBattery }
+        if lidClosed { return .skipLidClosed }   // 蓋が閉じていて画面が無い間は始めない（開けた後に実行）
         return .run
     }
 
@@ -102,6 +104,19 @@ enum Power {
 }
 
 extension Power {
+    /// 蓋が閉じていて、かつアクティブなディスプレイが無い（外部ディスプレイ接続のクラムシェル利用は除く）。
+    /// 外部ディスプレイがスリープ中のクラムシェル利用は、画面が復帰するまで延期する。
+    static func isLidClosedWithoutDisplay() -> Bool {
+        let svc = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard svc != 0 else { return false }
+        defer { IOObjectRelease(svc) }
+        guard let v = IORegistryEntryCreateCFProperty(svc, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue(),
+              (v as? Bool) == true else { return false }
+        var n: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &n) == .success else { return false }
+        return n == 0
+    }
+
     /// 直近1分のロードアベレージ（スキャン時間の変動要因の記録用）
     static func loadAverage() -> Double {
         var l = [Double](repeating: 0, count: 3)
@@ -125,6 +140,7 @@ enum Notifier {
 @MainActor
 final class Scheduler {
     var batteryLow: () -> Bool = { Power.isBatteryLow() }
+    var lidClosed: () -> Bool = { Power.isLidClosedWithoutDisplay() }
     var now: () -> Date = { Date() }
     var catchUpDelay: TimeInterval = 300
     var pollInterval: UInt64 = 60 * 1_000_000_000
@@ -162,7 +178,7 @@ final class Scheduler {
         let settings = Settings.load()
         let lastFull = ScanCacheStore.load().lastFullAt
         let decision = force ? ScheduleDecision.run
-            : SchedulerLogic.decide(settings: settings, now: now(), lastFull: lastFull, batteryLow: batteryLow(), busy: state.smartCare.running)
+            : SchedulerLogic.decide(settings: settings, now: now(), lastFull: lastFull, batteryLow: batteryLow(), busy: state.smartCare.running, lidClosed: lidClosed())
         if decision == .skipBattery { retryAt = now().addingTimeInterval(retryInterval) }   // 低バッテリーは 1 時間後に再確認
         guard decision == .run else { return }
         let completed = await state.smartCare.run(state: state, scheduled: true)
@@ -209,7 +225,8 @@ enum SmartCareStep: String, CaseIterable {
 struct SmartCareSteps {
     var cleanup: @MainActor (AppState, Settings) async -> (junk: Int64, safeJunk: Int64)
     /// 第 2 引数 true = フルスキャン（キャッシュを使わない）
-    var security: @MainActor (AppState, Bool) async -> Int
+    /// 第 3 引数 true = 低優先度（定期実行）
+    var security: @MainActor (AppState, Bool, Bool) async -> Int
     var loginItems: @MainActor (AppState) async -> (new: Int, changed: Int)
     var largeFiles: @MainActor (AppState, Settings) async -> (count: Int, bytes: Int64)
 
@@ -219,7 +236,7 @@ struct SmartCareSteps {
             let cats = st.cleanup.categories   // 完了直後に確定させる
             return (cats.reduce(0) { $0 + $1.size }, SmartCare.safeCategories(cats).reduce(0) { $0 + $1.size })
         },
-        security: { st, full in await st.security.scan(state: st, full: full); return st.security.detections.count },
+        security: { st, full, low in await st.security.scan(state: st, full: full, lowPriority: low); return st.security.detections.count },
         loginItems: { st in
             await st.loginItems.scan()
             return (st.loginItems.diff?.new.count ?? 0, st.loginItems.diff?.changed.count ?? 0)
@@ -269,9 +286,9 @@ final class SmartCareModel {
 
     private func timed<T>(_ s: SmartCareStep, _ body: () async -> T) async -> (value: T, seconds: Double) {
         activeSteps.insert(s)
-        let t = Date()
+        let t = ProcessInfo.processInfo.systemUptime   // スリープ中に進まない単調時計
         let v = await body()
-        let sec = Date().timeIntervalSince(t)
+        let sec = ProcessInfo.processInfo.systemUptime - t
         activeSteps.remove(s); doneSteps.insert(s)
         return (v, sec)
     }
@@ -289,14 +306,14 @@ final class SmartCareModel {
         defer { running = false; activeSteps = [] }
         let settings = Settings.load()
         let full = scheduled || !settings.quickScan
-        let t0 = Date()
+        let t0 = ProcessInfo.processInfo.systemUptime
         let ticker = Task { [weak self] in
             while !Task.isCancelled { self?.tick(state: state); try? await Task.sleep(nanoseconds: 500_000_000) }
         }
         defer { ticker.cancel() }
 
         // 値は各ステップの完了直後に確定させる（最後に共有状態を読み直さない）
-        let security = Task { await self.timed(.security) { await self.steps.security(state, full) } }
+        let security = Task { await self.timed(.security) { await self.steps.security(state, full, scheduled) } }
         let junk = await timed(.cleanup) { await steps.cleanup(state, settings) }
         var logins: (value: (new: Int, changed: Int), seconds: Double) = ((0, 0), 0)
         var large: (value: (count: Int, bytes: Int64), seconds: Double) = ((0, 0), 0)
@@ -314,7 +331,7 @@ final class SmartCareModel {
             date: Date(), junkBytes: junk.value.junk, safeJunkBytes: junk.value.safeJunk, threats: sec.value,
             newLoginItems: logins.value.new, changedLoginItems: logins.value.changed,
             largeFileCount: large.value.count, largeFileBytes: large.value.bytes,
-            deep: settings.deepScan, seconds: Date().timeIntervalSince(t0))
+            deep: settings.deepScan, seconds: ProcessInfo.processInfo.systemUptime - t0)
         r.save()
         result = r
         state.lastScanSummary = "前回: \(r.date.formatted(date: .abbreviated, time: .shortened)) / \(r.summary)"
