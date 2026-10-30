@@ -144,3 +144,53 @@ CleanMyMac（現行 CleanMyMac 5 / v5.7.1）を解約しても困らない状態
 4. EICAR テストファイルを ClamAV 経由で検出できる。
 5. 別の Mac への導入手順（install.sh / SETUP_PROMPT.md）が揃っている。
 6. CleanMyMac を終了した状態で1週間、定期スキャンが動作する。
+
+## 8. 知人向け配布（v0.2、2026-10-29 追加）
+
+### 8.1 目的・前提
+- 一部の知人（Mac に詳しくない人を含む）に無料で配布し、作者が一元的にアップデートを配信する。
+- 費用は 0 円（Apple Developer Program には加入しない＝公証なし）。
+- 対象は Apple Silicon（arm64）・macOS 14 以降のみ。Intel Mac は対象外。
+- 作者自身の Mac も配布版と同じ仕組みで更新する（git pull 方式は廃止）。
+
+### 8.2 配布物とインストール
+- `MacCare-<version>.dmg`（`MacCare.app` と `/Applications` へのショートカット）を GitHub Releases（public リポジトリ）に置く。URL を知っていれば誰でも取得できる点は許容する。
+- 初回のみ Gatekeeper にブロックされるため、利用者は「システム設定 → プライバシーとセキュリティ → このまま開く」を行う。画像付きの手順書 `docs/INSTALL_GUIDE.md` を用意する。
+- Homebrew・Xcode Command Line Tools・git は不要にする。
+
+### 8.3 署名
+- 作者の Mac で自己署名のコード署名証明書（名称 `MacCare Self-Signed`）を作成し、全リリースで同じ証明書を使う。署名が変わると TCC（フルディスクアクセス等）の許可が更新のたびに失われるため、アドホック署名は配布版で使わない。
+- 証明書と秘密鍵は作者のキーチェーンに保管し、リポジトリには入れない。バックアップ（.p12）の保管方法を手順書に記載する。
+- ハードンドランタイムは無効にする（自己署名には Team ID が無く、有効だと Sparkle.framework 等の読み込みが拒否されるため。P8-1 で確認）。
+
+### 8.4 アップデート配信（Sparkle 2）
+- Sparkle 2 を `Contents/Frameworks` に組み込む。appcast（`appcast.xml`）は GitHub Releases の最新版の添付ファイルとして公開し、`SUFeedURL` は `https://github.com/withfox-fox1/mac-care/releases/latest/download/appcast.xml` とする。
+- 更新ファイルは EdDSA で署名し、`SUPublicEDKey` を Info.plist に埋め込む。秘密鍵は作者のキーチェーンのみに保管する。署名のない・不一致の更新は Sparkle が拒否する。
+- 自動確認は 1 日 1 回。更新の実行は利用者のボタン操作で行う（勝手に入れ替えない）。
+- 「システム修正の配信」もアプリの更新として配る。任意のコマンドを遠隔実行する仕組みは作らない。
+- 既存の `SelfUpdate.swift`（git 方式）と設定画面の更新 UI は Sparkle に置き換える。
+
+### 8.5 外部ツールの同梱
+- `ffmpeg` / `ffprobe` / `yara` / `yarac` / `clamscan` / `freshclam` / `sigtool` を `Contents/Helpers/` に同梱し、依存する dylib を `Contents/Frameworks/tools/` にまとめて参照先を書き換える（`dylibbundler` を使用、作者の Homebrew の arm64 版を元にする）。
+- `Tools.locate` は同梱版を優先し、無ければ従来どおり Homebrew の場所を探す。
+- OpenSSL は 4.0.3 を同梱する（4.1.0 では ClamAV 1.5.4 が定義を読めない既知不具合のため）。ClamAV 側の修正版が出たら見直す。
+- ClamAV の実行時は `--cvdcertsdir=<Resources/clamav-certs>` を渡し、`LD_LIBRARY_PATH=<Frameworks/tools>` を設定する（RAR モジュールの dlopen 用。`libclamunrar_iface.dylib` のリンクも置く）。
+- ClamAV の定義（約 300MB）は同梱しない。`~/Library/Application Support/MacCare/clamav/` に `freshclam.conf` と定義を置き、初回のセキュリティスキャン前にダウンロードする（進捗表示あり）。
+- GPL（ffmpeg・ClamAV）等のライセンス表記とソースの入手先を、アプリ内（設定 → このアプリについて）と DMG 内の `LICENSES` に記載する。
+- アプリ全体のサイズは 150〜250MB を見込む。Sparkle の更新は全体のダウンロードになる。
+
+### 8.6 他人の Mac で使う前提の安全対策
+- 作者専用の設定（never-clean の個別項目など）は害がないものだけ残す。
+- 初回オンボーディングに「自己責任で使用すること」「削除はゴミ箱経由で戻せること」を表示する。
+- 外部送信は ClamAV 定義のダウンロードと Sparkle の更新確認のみ。README に明記する。
+
+### 8.7 リリース手順
+- `./release.sh <version>`：バージョン更新 → ビルド → 自己署名 → DMG 作成 → Sparkle の EdDSA 署名 → appcast 生成 → `gh release create` でアップロード。作者がコマンド 1 つで配信できることを目標とする。
+
+### 8.8 完成条件
+1. 開発環境（Homebrew・CLT）を一時的に見えなくした状態、または別ユーザーアカウントで、DMG からインストール → 初回起動 → 動画圧縮・セキュリティスキャン（EICAR 検出）が動く。
+2. 旧バージョンから Sparkle 経由で新バージョンに更新でき、フルディスクアクセスの許可が引き継がれる。
+3. 改ざんした更新（EdDSA 署名不一致）を Sparkle が拒否する。
+4. `release.sh` で GitHub Releases への公開まで完了する。
+5. 利用者向け手順書（初回の「このまま開く」を含む）がある。
+6. `./test.sh` が全件 PASS。

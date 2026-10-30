@@ -11,3 +11,8 @@
 | 2026-10-14 | 別の Mac にも導入できるよう GitHub＋SETUP_PROMPT.md で配布 | ユーザー要望。menubar-meters と同じ運用 | このMacのみ |
 | 2026-10-14 | ビルドは swiftc＋build.sh（Xcode プロジェクトなし） | menubar-meters と構成を揃え、別 Mac では Command Line Tools だけでビルドできるようにする | Xcode プロジェクト、SwiftPM |
 | 2026-10-14 | v1 は管理者権限を要求しない | 権限周りの複雑さとリスクを避ける。必要な箇所は表示＋システム設定への誘導 | 特権ヘルパー（SMJobBless 等） |
+| 2026-10-29 | 知人向けに DMG＋Sparkle で配布し、git 方式の自己更新を廃止 | 利用者に開発環境を求めず、作者が一元的に更新を配信できるため | git clone＋install.sh（開発環境が必要）、任意コマンドの遠隔実行（バックドアになるため不可） |
+| 2026-10-29 | 公証なし・自己署名証明書で署名 | 費用 0 円の要望。アドホック署名では更新のたびに TCC 許可が失われる | Apple Developer Program（年 12,980 円）、アドホック署名 |
+| 2026-10-29 | ffmpeg / yara / clamav をアプリに同梱（定義は同梱しない） | 利用者に Homebrew を求めないため | ツールなしで起動し必要な人だけ導入（ユーザーが同梱を選択） |
+| 2026-10-29 | 配布先は public リポジトリの GitHub Releases、arm64 のみ | 最も簡単。Intel Mac の利用者はいない | Xserver（URL 限定）、ユニバーサルビルド |
+| 2026-10-29 | 配布版はハードンドランタイム無効、同梱 OpenSSL は 4.0.3 | 自己署名では Team ID が無くライブラリ検証で拒否される。OpenSSL 4.1.0 は ClamAV 1.5.4 で定義を読めない | ハードンドランタイム＋disable-library-validation（無効化と実質同じで設定が増える）、OpenSSL 4.1.0 |

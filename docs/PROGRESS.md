@@ -1,6 +1,31 @@
 # 進捗
 
-## 2026-10-16（現在の状態）※再開時はここから読む
+## 2026-10-29（現在の状態）※再開時はここから読む
+
+### 10/29 夕方の対応（未コミット）
+- 自己アップデートの「ソースフォルダが見つかりません」→ フォルダ移動後に build.sh install し直して解消（MCSourceDir は build 時の $PWD）。
+- ClamAV 応急処置：clamscan/freshclam 起動時だけ OpenSSL 4.0.3 を DYLD_LIBRARY_PATH で渡す（Security.swift `openSSLWorkaroundEnv`、Shell.run に environment 引数）。402/402 PASS、Fable レビュー OK、インストール済み。実スキャンで ranClam=true・警告なし・870 秒（ClamAV 849 秒）。4.0.3 のバックアップ：`~/.maccare-vendor/openssl@4-4.0.3/`。P8-2 で削除する。
+- 夜の定期スキャンが 10〜18 時間と記録される件：原因はバッテリー＋蓋閉じの DarkWake（Clamshell Sleep）。アプリのアサーション（既存 SleepGuard）では防げないことを pmset ログで確認。対応（A 案）：①所要時間を systemUptime で計測 ②蓋が閉じて画面が無い間は定期スキャンを始めない（`Power.isLidClosedWithoutDisplay`、`.skipLidClosed`）③定期実行時のみ clamscan/yara を QoS utility（background は約 4 倍遅く 3643 秒だったため utility に変更、872 秒・PRI 20 を確認。`SecurityModel.scanQoS`、BPS 学習しない）。408/408 PASS、Fable レビュー指摘対応済み、インストール済み。実際に蓋を閉じた夜の挙動は未確認（翌朝 pmset ログと履歴で確認する）。コミット・push は未。
+
+### P8 知人向け配布（SPEC 8 章・ROADMAP P8）
+- 方針確定：無料（公証なし）・自己署名・DMG＋Sparkle 2.10.1・ツール同梱・arm64 のみ・GitHub Releases（public）。
+- **P8-1 技術検証 完了**（試作は scratchpad で実施。リポジトリのコードは未変更）
+  - 自己署名証明書「MacCare Self-Signed」（20 年、SHA-1 B9AEBB537E827CAACF8F99F179F7F785BE810372）をログインキーチェーンに登録。バックアップ：`~/.maccare-signing/MacCare-Self-Signed.p12`（パスワードはキーチェーンの汎用パスワード「MacCare signing p12 password」）。designated requirement は `certificate root = H"b9ae…"` となり、更新後も TCC の許可が引き継がれる見込み（実機での許可引き継ぎ確認は P8-3）。
+  - Sparkle の EdDSA 鍵：`generate_keys --account maccare`（秘密鍵はキーチェーン）。公開鍵 `rAwM9IUfZOhTHWBL+yZQ4eS0EmyJxd8AasuIKZU82YI=`。
+  - Sparkle：試作アプリで v1→v2 の自動更新に成功。改ざんした zip は Code 4005（署名不正）で拒否され v1 のまま。
+  - ハードンドランタイム有効だと Sparkle.framework が「different Team IDs」で読み込めない → **配布版はハードンドランタイム無効**。
+  - ツール同梱：7 ツール＋依存 53 dylib ＝約 66MB。`dylibbundler -od -b -x <各ツール> -s <brew の各 opt/*/lib> -d Contents/Frameworks/tools -p @executable_path/../Frameworks/tools/`（検索パス指定なしだと対話入力待ちで止まる。stdin は /dev/null にする）。DYLD_PRINT_LIBRARIES で Homebrew のライブラリを読まないことを確認。ffmpeg の hevc_videotoolbox、yarac/yara（XProtect ルール）、clamscan の EICAR 検出が動作。
+  - ClamAV の注意点：
+    - 定義の検証に証明書フォルダが必要（`--cvdcertsdir`、`/opt/homebrew/etc/clamav/certs/clamav.crt` を同梱）。
+    - RAR モジュールは実行時に dlopen される。`LD_LIBRARY_PATH=<tools>` を渡し、`libclamunrar_iface.dylib`（バージョンなしの名前）のリンクを置く必要がある。
+    - **OpenSSL 4.1.0 では定義を読めない**（ClamAV 1.5.4 の既知不具合、Cisco-Talos/clamav PR #1873）。同梱は OpenSSL 4.0.3（`/opt/homebrew/Cellar/openssl@4/4.0.3`）を使う。同じ定義で 4.0.3 は 362 万件読み込み EICAR 検出、4.1.0 は Malformed database を確認済み。
+- **このMacの現行 MacCare の ClamAV が 10/27 夜から失敗中**：Homebrew の openssl@4 が 10/27 21:45 に 4.1.0 へ更新されたため。10/28 のスキャンは警告「clamscan がエラー終了 (2)」で ranClam=false（YARA は動作）。配布版（OpenSSL 4.0.3 同梱）への移行で解消する予定。
+- ClamAV の配信サーバー（CDN）からレート制限中：検証で freshclam を繰り返したため。2026-10-30 17:39 まで定義の更新不可。
+
+### 次の作業
+- P8-2：ツール同梱を build.sh に組み込み、`Tools.locate` を同梱優先に。ClamAV 定義を `~/Library/Application Support/MacCare/clamav/` へ。freshclam は 10/30 17:39 以降に確認。
+
+## 2026-10-16 時点の状態
 
 ### 実装状況（最新コミットは git log を参照）
 - P0〜P6 完了。P7（CleanMyMac を止めて 1 週間運用）を 10/16 に開始。
