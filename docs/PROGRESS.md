@@ -2,10 +2,10 @@
 
 ## 2026-10-29（現在の状態）※再開時はここから読む
 
-### 10/29 夕方の対応（未コミット）
+### 10/29〜30 の対応（a07de89 で push 済み）
 - 自己アップデートの「ソースフォルダが見つかりません」→ フォルダ移動後に build.sh install し直して解消（MCSourceDir は build 時の $PWD）。
 - ClamAV 応急処置：clamscan/freshclam 起動時だけ OpenSSL 4.0.3 を DYLD_LIBRARY_PATH で渡す（Security.swift `openSSLWorkaroundEnv`、Shell.run に environment 引数）。402/402 PASS、Fable レビュー OK、インストール済み。実スキャンで ranClam=true・警告なし・870 秒（ClamAV 849 秒）。4.0.3 のバックアップ：`~/.maccare-vendor/openssl@4-4.0.3/`。P8-2 で削除する。
-- 夜の定期スキャンが 10〜18 時間と記録される件：原因はバッテリー＋蓋閉じの DarkWake（Clamshell Sleep）。アプリのアサーション（既存 SleepGuard）では防げないことを pmset ログで確認。対応（A 案）：①所要時間を systemUptime で計測 ②蓋が閉じて画面が無い間は定期スキャンを始めない（`Power.isLidClosedWithoutDisplay`、`.skipLidClosed`）③定期実行時のみ clamscan/yara を QoS utility（background は約 4 倍遅く 3643 秒だったため utility に変更、872 秒・PRI 20 を確認。`SecurityModel.scanQoS`、BPS 学習しない）。408/408 PASS、Fable レビュー指摘対応済み、インストール済み。実際に蓋を閉じた夜の挙動は未確認（翌朝 pmset ログと履歴で確認する）。コミット・push は未。
+- 夜の定期スキャンが 10〜18 時間と記録される件：原因はバッテリー＋蓋閉じの DarkWake（Clamshell Sleep）。アプリのアサーション（既存 SleepGuard）では防げないことを pmset ログで確認。対応（A 案）：①所要時間を systemUptime で計測 ②蓋が閉じて画面が無い間は定期スキャンを始めない（`Power.isLidClosedWithoutDisplay`、`.skipLidClosed`）③定期実行時のみ clamscan/yara を QoS utility（background は約 4 倍遅く 3643 秒だったため utility に変更、872 秒・PRI 20 を確認。`SecurityModel.scanQoS`、BPS 学習しない）。408/408 PASS、Fable レビュー指摘対応済み、インストール済み。実際に蓋を閉じた夜の挙動は未確認（翌朝 pmset ログと履歴で確認する）。
 
 ### P8 知人向け配布（SPEC 8 章・ROADMAP P8）
 - 方針確定：無料（公証なし）・自己署名・DMG＋Sparkle 2.10.1・ツール同梱・arm64 のみ・GitHub Releases（public）。
