@@ -39,6 +39,8 @@ struct SmartCareResult: Codable, Equatable {
 enum SmartCare {
     /// スマートケアから削除してよい分類（既定で安全なもののみ）。node_modules / Xcode / ゴミ箱は含めない。
     static let safeCategoryIDs: Set<String> = ["caches", "logs", "npm", "brew", "pip"]
+    /// パネルの［すぐ掃除］を出す下限。キャッシュは掃除直後から少しずつ再生成されるため、少量では出さない
+    static let quickCleanMinBytes: Int64 = 50_000_000
 
     static func safeCategories(_ cats: [CleanupCategory]) -> [CleanupCategory] {
         cats.filter { safeCategoryIDs.contains($0.id) }
@@ -342,14 +344,37 @@ final class SmartCareModel {
     }
 
     /// 確認済みのスナップショットのみをゴミ箱へ。CleanupModel.selected は変更しない。
+    /// 解放後の集計は、再スキャン完了時の syncJunk で結果に反映される。
     func trashSafe(_ jobs: [CleanupJob], state: AppState) async {
         await state.cleanup.cleanItems(jobs, settings: Settings.load())
-        // 解放後の集計を反映（クリーンアップ画面の最新状態から）
-        if var r = result {
-            let cats = state.cleanup.categories
-            r.junkBytes = cats.reduce(0) { $0 + $1.size }
-            r.safeJunkBytes = SmartCare.safeCategories(cats).reduce(0) { $0 + $1.size }
-            r.save(); result = r
-        }
     }
+
+    /// クリーンアップのスキャン結果で、保存済みの結果の不要データ量だけを最新化する。
+    /// スマートケア実行中は、実行完了時に結果を確定させるため更新しない。
+    func syncJunk(from cats: [CleanupCategory]) {
+        guard !running, var r = result else { return }
+        let junk = cats.reduce(0) { $0 + $1.size }
+        let safe = SmartCare.safeCategories(cats).reduce(0) { $0 + $1.size }
+        guard r.junkBytes != junk || r.safeJunkBytes != safe else { return }
+        r.junkBytes = junk; r.safeJunkBytes = safe
+        r.save(); result = r
+    }
+
+    /// メニューバーのパネル用: 安全な分類のみを最新の状態で集計し直し、確認に出す内容（実行内容のスナップショット）を返す。
+    /// 削除はしない。実行中・対象が quickCleanMinBytes 未満は nil。
+    func quickCleanPlan(state: AppState) async -> QuickCleanPlan? {
+        guard !running, !state.cleanup.scanning, !state.cleanup.cleaning else { return nil }
+        await state.cleanup.scan(settings: Settings.load())
+        let cats = state.cleanup.categories
+        let jobs = SmartCare.safeJobs(cats)
+        guard jobs.reduce(0, { $0 + $1.item.size }) >= SmartCare.quickCleanMinBytes else { return nil }
+        return QuickCleanPlan(jobs: jobs, message: CleanupModel.summary(of: jobs, categories: SmartCare.safeCategories(cats)))
+    }
+}
+
+/// パネルの確認カードに出す内容と、確認後にそのまま実行する対象
+struct QuickCleanPlan: Equatable {
+    let jobs: [CleanupJob]
+    let message: String
+    var bytes: Int64 { jobs.reduce(0) { $0 + $1.item.size } }
 }

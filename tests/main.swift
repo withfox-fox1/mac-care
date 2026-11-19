@@ -1009,6 +1009,58 @@ func onboardingTests() {
 }
 onboardingTests()
 
+// MARK: クリーンアップ後のパネル反映・パネルからの掃除
+func junkSyncTests() {
+    let mkCat = { (id: String, size: Int64) in
+        CleanupCategory(id: id, name: id, summary: "", effect: "", roots: [],
+                        items: [CleanupItem(url: URL(fileURLWithPath: "/tmp/\(id)"), size: size)], skipped: 0)
+    }
+    let out = runMain { () -> (Int64?, Int64?, Int64?, Int64?, Bool) in
+        let st = AppState()
+        st.smartCare.result = SmartCareResult(date: Date(), junkBytes: 5_000, safeJunkBytes: 3_000, threats: 0, newLoginItems: 0,
+                                              changedLoginItems: 0, largeFileCount: 0, largeFileBytes: 0, deep: false, seconds: 1)
+        // 掃除後の再スキャン相当: AppState が配線した通知経由で反映される
+        st.cleanup.onScanned?([mkCat("caches", 100), mkCat("node_modules", 900)])
+        let a = st.smartCare.result
+        let saved = SmartCareResult.load()
+        // スマートケア実行中は更新しない
+        st.smartCare.running = true
+        st.smartCare.syncJunk(from: [])
+        let b = st.smartCare.result?.junkBytes
+        st.smartCare.running = false
+        return (a?.junkBytes, a?.safeJunkBytes, saved?.junkBytes, b, st.smartCare.result?.date != nil)
+    }
+    check(out.0 == 1_000 && out.1 == 100, "掃除後: 再スキャン結果で不要データ量(全体・安全分)を更新")
+    check(out.2 == 1_000, "掃除後: 更新した不要データ量を保存する(再起動後もパネルに反映)")
+    check(out.3 == 1_000, "掃除後: スマートケア実行中は結果を書き換えない")
+    let none = runMain { () -> Bool in
+        let st = AppState(); st.smartCare.result = nil
+        st.smartCare.syncJunk(from: [mkCat("caches", 1)])
+        return st.smartCare.result == nil
+    }
+    check(none, "掃除後: スマートケア未実行なら結果を作らない")
+    // パネルの「すぐ掃除」: 集計して確認内容を返すだけで、何も移動しない。対象は安全な分類のみ
+    let qc = runMain { () -> (QuickCleanPlan?, Bool, Bool) in
+        let st = AppState()
+        let plan = await st.smartCare.quickCleanPlan(state: st)
+        let allExist = (plan?.jobs ?? []).allSatisfy { FileManager.default.fileExists(atPath: $0.item.url.path) }
+        return (plan, allExist, st.cleanup.cleaning)
+    }
+    check(qc.1 && !qc.2, "パネル掃除: 確認内容の作成では何も移動しない")
+    check((qc.0?.jobs ?? []).allSatisfy { j in !j.item.url.path.contains("node_modules") && !j.item.url.path.contains("/Xcode/") }
+          && qc.0.map { !$0.message.contains("node_modules") } ?? true, "パネル掃除: 対象は安全な分類のみ")
+    check(qc.0.map { $0.bytes == $0.jobs.reduce(0) { $0 + $1.item.size } } ?? true, "パネル掃除: 合計は確認対象の合計")
+    let busy = runMain { () -> Bool in
+        let st = AppState(); st.smartCare.running = true
+        let plan = await st.smartCare.quickCleanPlan(state: st)
+        st.smartCare.running = false
+        return plan == nil && !st.cleanup.scanning
+    }
+    check(busy, "パネル掃除: スマートケア実行中は何もしない")
+    check(qc.0.map { $0.bytes >= SmartCare.quickCleanMinBytes } ?? true, "パネル掃除: 下限未満なら確認を出さない")
+}
+junkSyncTests()
+
 try? fm.removeItem(at: work)
 print("\n\(count - failures)/\(count) passed")
 exit(failures == 0 ? 0 : 1)

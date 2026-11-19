@@ -261,6 +261,8 @@ final class CleanupModel {
     var trashReadable = false
     var trashSize: Int64 = 0
     private var scanTask: Task<Void, Never>?
+    /// スキャン完了時の通知（掃除後の再スキャンも含む）。スマートケア結果の不要データ量を最新化するために使う
+    var onScanned: (@MainActor ([CleanupCategory]) -> Void)? = nil
 
     var excludedCount: Int { categories.reduce(0) { $0 + $1.excluded.count } }
 
@@ -318,6 +320,7 @@ final class CleanupModel {
         selected = selected.intersection(Set(cats.flatMap { $0.items.map(\.id) }))
         trashReadable = readable; trashSize = tsize
         hasScanned = true; lastScannedAt = Date(); scanning = false; progressText = ""
+        onScanned?(cats)
     }
 
     /// スナップショットされた項目のみをゴミ箱へ（SafeTrash 経由）。共有の選択状態は読まない・変更しない。

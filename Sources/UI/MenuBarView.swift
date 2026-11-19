@@ -39,6 +39,13 @@ struct WindowVisibilityObserver: NSViewRepresentable {
 /// メニューバーのパネル（--show-panel では通常ウィンドウにも同じ内容を出す）
 struct MenuBarView: View {
     @Environment(AppState.self) private var state
+    /// パネル内の確認カード（nil = 非表示）。パネルを閉じたら破棄する
+    @State private var cleanPlan: QuickCleanPlan? = nil
+    /// 「すぐ掃除」の集計中
+    @State private var preparing = false
+    /// 掃除完了のお知らせ（パネルを閉じたら消す）
+    @State private var cleanDone: String? = nil
+    @State private var visible = false
 
     private func openMain(_ section: String? = nil) {
         if let section { state.requestedSection = section }
@@ -57,6 +64,7 @@ struct MenuBarView: View {
             header
             securityCard
             grid(mx)
+            quickCleanCard
             VStack(alignment: .leading, spacing: 8) {
                 Text("おすすめ").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.secondary).padding(.leading, 4)
                 recommendationCard
@@ -68,8 +76,9 @@ struct MenuBarView: View {
         .background(ThemedBackground())
         .oceanScheme()
         .background(WindowVisibilityObserver { visible in
+            self.visible = visible
             if visible { state.refresh(); Task { await state.security.refreshStatus() }; state.metrics.start() }
-            else { state.metrics.stop() }
+            else { state.metrics.stop(); cleanPlan = nil; cleanDone = nil }   // 閉じたら確認は取り消し扱い
         })
     }
 
@@ -187,22 +196,87 @@ struct MenuBarView: View {
         .font(.system(size: 11.5)).foregroundStyle(Theme.secondary).padding(.top, 8)
     }
 
-    private func linkText(_ t: String) -> some View {
-        Text(t).font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accentText)
-            .frame(maxWidth: .infinity, alignment: .trailing).padding(.top, 8)
-    }
-
     private var diskCard: some View {
         let d = state.disk
         let used = d.map { Double($0.total - $0.available) / Double(max(1, $0.total)) } ?? 0
-        let junk = state.smartCare.result?.junkBytes
+        let r = state.smartCare.result
+        let c = state.cleanup
         return CardView(padding: 12) {
             VStack(alignment: .leading, spacing: 0) {
                 title("internaldrive.fill", Color(hex: "67e8f9"), DiskInfo.volumeName, d.map { "空き \(formatBytes($0.available))" } ?? "取得できません")
                 bar(used, [Theme.accentText, Theme.info])
-                Button { openMain("cleanup") } label: {
-                    linkText(junk.map { "掃除できる \(formatBytes($0)) ›" } ?? "クリーンアップを開く ›")
-                }.buttonStyle(.plain)
+                // パネル内で完結させるため、表示のみ（アプリは開かない）。掃除は下の［すぐ掃除…］から
+                Text(r.map { "掃除できる \(formatBytes($0.junkBytes))" } ?? "スマートケア未実行")
+                    .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.top, 8)
+                if !(c.scanning || c.cleaning || preparing || cleanPlan != nil), let r, r.safeJunkBytes >= SmartCare.quickCleanMinBytes {
+                    Button("すぐ掃除…") { prepareClean() }
+                        .buttonStyle(.primaryCompact).disabled(state.smartCare.running)
+                        .help("キャッシュ・ログ・npm・Homebrew・pip（約 \(formatBytes(r.safeJunkBytes))）をゴミ箱へ移動します（確認あり）")
+                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.top, 6)
+                }
+            }
+        }
+    }
+
+    /// パネルの「すぐ掃除」: 最新の状態で集計し直し、パネル内の確認カードに内容を出す（削除はまだしない）
+    private func prepareClean() {
+        let st = state
+        cleanDone = nil; preparing = true
+        Task {
+            let plan = await st.smartCare.quickCleanPlan(state: st)
+            preparing = false
+            guard visible else { return }   // 集計中にパネルを閉じたら確認を出さない
+            if let plan { cleanPlan = plan } else { cleanDone = "いま掃除が必要な不要データはありません" }
+        }
+    }
+
+    /// 確認カードで表示した内容（スナップショット）だけをゴミ箱へ移動する
+    private func confirmClean(_ plan: QuickCleanPlan) {
+        let st = state
+        cleanPlan = nil
+        Task {
+            await st.smartCare.trashSafe(plan.jobs, state: st)
+            if let m = st.cleanup.message { cleanDone = m }
+            else { cleanDone = "\(formatBytes(st.cleanup.lastFreed ?? plan.bytes)) をゴミ箱へ移動しました（ゴミ箱から元に戻せます）" }
+        }
+    }
+
+    /// パネル内の掃除カード（集計中・確認・移動中・完了）。パネル内で完結させ、別ウィンドウやダイアログは出さない
+    @ViewBuilder private var quickCleanCard: some View {
+        let c = state.cleanup
+        if preparing || c.cleaning {
+            CardView(padding: 12) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(c.cleaning ? "ゴミ箱へ移動中…" : "掃除できる項目を集計中…").font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
+                    Spacer(minLength: 0)
+                }
+            }
+        } else if let plan = cleanPlan {
+            CardView(padding: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("不要データをゴミ箱へ移動しますか？").font(.system(size: 13.5, weight: .bold))
+                    Text(plan.message).font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(Confirm.undoNote).font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        Button("キャンセル") { cleanPlan = nil }.buttonStyle(.secondary).fixedSize()
+                        Button("ゴミ箱へ移動") { confirmClean(plan) }.buttonStyle(.primaryCompact).fixedSize()
+                    }
+                }
+            }
+        } else if let t = cleanDone {
+            CardView(padding: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: c.message == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(c.message == nil ? Theme.ok : Theme.warn)
+                    Text(t).font(.system(size: 12.5)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button { cleanDone = nil } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .bold)) }
+                        .buttonStyle(.plain).foregroundStyle(Theme.secondary).accessibilityLabel("閉じる")
+                }
             }
         }
     }

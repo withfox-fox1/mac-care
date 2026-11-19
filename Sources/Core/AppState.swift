@@ -28,6 +28,11 @@ final class AppState {
     var launchScanPending = CommandLine.arguments.contains("--scan")
     private var backgroundStarted = false
 
+    init() {
+        // クリーンアップの掃除・再スキャン後に、パネル・スコア・おすすめが参照する不要データ量を最新化する
+        cleanup.onScanned = { [weak smartCare] cats in smartCare?.syncJunk(from: cats) }
+    }
+
     /// メニューバーアイコンを警告表示にするか
     /// ゴミ箱を開くボタンを付けるお知らせの本文（update.notice と同じ本文のときだけ有効）
     var trashNoticeText: String? = nil
